@@ -8,6 +8,10 @@ from .views import (
     LogoutView,
     PasswordResetView,
     PasswordResetConfirmView,
+    SetupView,
+    ActivateView,
+    VerifyView,
+    RecoveryCodesView,
 )
 
 # As rotas aceitam com ou sem barra no final.
@@ -22,6 +26,15 @@ urlpatterns = [
         LoginView.as_view(),
         name='auth-login'
     ),
+
+    # SEGUNDO FATOR (2FA com TOTP)
+    # setup: primeiro acesso, devolve o QR Code.
+    # activate: confirma o cadastro, devolve tokens + codigos de recuperacao.
+    # verify: acessos seguintes, codigo do app (ou de recuperacao) -> tokens.
+    re_path(r'^2fa/setup/?$', SetupView.as_view(), name='auth-2fa-setup'),
+    re_path(r'^2fa/activate/?$', ActivateView.as_view(), name='auth-2fa-activate'),
+    re_path(r'^2fa/verify/?$', VerifyView.as_view(), name='auth-2fa-verify'),
+    re_path(r'^2fa/recovery-codes/?$', RecoveryCodesView.as_view(), name='auth-2fa-recovery-codes'),
 
     # RENOVAR TOKEN
     # Recebe refresh e devolve novo access.

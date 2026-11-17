@@ -351,6 +351,7 @@ class FluxoEntregaTest(APITestCase):
         self.url = f"/api/v1/shipments/{self.c['viagem'].id}"
         self.motorista = self._usuario('motorista', 'Motorista')
         self.comprador = self._usuario('comprador', 'Comprador')
+        Shipment.objects.filter(pk=self.c['viagem'].id).update(driver=self.motorista, buyer=self.comprador)
 
     def _usuario(self, nome, grupo):
         from django.contrib.auth.models import Group

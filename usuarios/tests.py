@@ -7,7 +7,7 @@ from django.utils import timezone
 from rest_framework.test import APITestCase
 
 from iot.services import register_reading
-from piADS04.tests_utils import montar_cenario
+from piADS04.tests_utils import entrar_com_2fa, montar_cenario
 
 
 class AuthTest(APITestCase):
@@ -21,10 +21,16 @@ class AuthTest(APITestCase):
     def logar(self, email='ana@exemplo.com', password='senha-forte-123'):
         return self.client.post('/api/v1/auth/login', {'email': email, 'password': password})
 
-    def test_login_por_email_devolve_tokens_e_usuario_no_formato_do_plano(self):
+    def test_login_so_com_senha_nao_entrega_token(self):
         resposta = self.logar()
         self.assertEqual(resposta.status_code, 200)
         corpo = resposta.json()['data']
+        self.assertNotIn('access', corpo)
+        self.assertTrue(corpo['mfa_required'])
+        self.assertIn('mfa_token', corpo)
+
+    def test_login_com_2fa_devolve_tokens_e_usuario_no_formato_do_plano(self):
+        corpo = entrar_com_2fa(self.client, 'ana@exemplo.com', 'senha-forte-123')
         self.assertIn('access', corpo)
         self.assertIn('refresh', corpo)
         self.assertEqual(corpo['user'], {'id': self.usuario.id, 'name': 'Ana Lima',
@@ -37,7 +43,7 @@ class AuthTest(APITestCase):
         self.assertEqual(self.logar(password='errada').status_code, 400)
 
     def test_refresh_gera_novo_access(self):
-        refresh = self.logar().json()['data']['refresh']
+        refresh = entrar_com_2fa(self.client, 'ana@exemplo.com', 'senha-forte-123')['refresh']
         resposta = self.client.post('/api/v1/auth/refresh', {'refresh': refresh})
         self.assertEqual(resposta.status_code, 200)
         self.assertIn('access', resposta.json()['data'])
@@ -46,7 +52,7 @@ class AuthTest(APITestCase):
         self.assertEqual(self.client.get('/api/v1/auth/me').status_code, 401)
 
     def test_me_mostra_papel_grupos_e_permissoes(self):
-        token = self.logar().json()['data']['access']
+        token = entrar_com_2fa(self.client, 'ana@exemplo.com', 'senha-forte-123')['access']
         resposta = self.client.get('/api/v1/auth/me', HTTP_AUTHORIZATION=f'Bearer {token}')
         self.assertEqual(resposta.status_code, 200)
         self.assertEqual(resposta.data['role'], 'operator')
@@ -68,6 +74,7 @@ class PermissionsByGroupTest(APITestCase):
         usuario = User.objects.create_user(f'u-{grupo}', password='x')
         usuario.groups.add(Group.objects.get(name=grupo))
         self.client.force_authenticate(usuario)
+        return usuario
 
     def test_sem_login_nao_acessa_nada(self):
         self.assertEqual(self.client.get('/api/v1/locations').status_code, 401)
@@ -92,9 +99,13 @@ class PermissionsByGroupTest(APITestCase):
 
     def test_visualizador_nao_inicia_viagem_mas_operador_inicia(self):
         url = f"/api/v1/shipments/{self.c['viagem'].id}/start"
-        self.usuario_no_grupo('Visualizador')
+        visualizador = self.usuario_no_grupo('Visualizador')
+        self.c['viagem'].driver = visualizador  # participa da viagem, mas o papel nao permite iniciar
+        self.c['viagem'].save()
         self.assertEqual(self.client.post(url).status_code, 403)
-        self.usuario_no_grupo('Operador')
+        operador = self.usuario_no_grupo('Operador')
+        self.c['viagem'].created_by = operador  # dono da viagem (protecao contra IDOR)
+        self.c['viagem'].save()
         self.assertEqual(self.client.post(url).status_code, 200)
 
 
@@ -208,8 +219,7 @@ class SwaggerWithAdminSessionTest(APITestCase):
 
     def test_staff_com_jwt_tambem_ve_a_documentacao(self):
         User.objects.create_user('chefe', password='senha-forte-123', is_staff=True, email='chefe@exemplo.com')
-        token = self.client.post('/api/v1/auth/login', {'email': 'chefe@exemplo.com', 'password': 'senha-forte-123'}
-                                 ).json()['data']['access']
+        token = entrar_com_2fa(self.client, 'chefe@exemplo.com', 'senha-forte-123')['access']
         resposta = self.client.get('/api/schema/', HTTP_AUTHORIZATION=f'Bearer {token}')
         self.assertEqual(resposta.status_code, 200)
 

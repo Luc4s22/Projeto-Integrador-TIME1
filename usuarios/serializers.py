@@ -47,8 +47,15 @@ class LoginSerializer(serializers.Serializer):
         if usuario is None or not usuario.is_active:
             raise erro
 
-        refresh = RefreshToken.for_user(usuario)
-        return {'access': str(refresh.access_token), 'refresh': str(refresh), 'user': dados_basicos(usuario)}
+        # Senha certa NAO entrega mais o token: so identifica o usuario.
+        # Quem decide o que vem depois (cadastro ou codigo do 2FA) e a LoginView.
+        return {'usuario': usuario}
+
+
+def emitir_tokens(usuario):
+    """Tokens JWT + dados do usuario. So e chamado DEPOIS do segundo fator."""
+    refresh = RefreshToken.for_user(usuario)
+    return {'access': str(refresh.access_token), 'refresh': str(refresh), 'user': dados_basicos(usuario)}
 
 
 class MeSerializer(serializers.ModelSerializer):

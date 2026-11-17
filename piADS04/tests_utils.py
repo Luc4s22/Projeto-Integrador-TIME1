@@ -39,3 +39,27 @@ def montar_cenario(com_limites=True, status='active'):
         'fazenda': fazenda, 'centro': centro, 'veiculo': veiculo, 'dispositivo': dispositivo,
         'chave': chave, 'fruta': fruta, 'viagem': viagem, 'inicio': inicio,
     }
+
+
+def entrar_com_2fa(client, email, senha):
+    """
+    Faz o login completo com 2FA pela API (como o front faz) e devolve o corpo
+    final (access, refresh, user...). Na primeira vez cadastra o autenticador;
+    nas seguintes so confere o codigo. O codigo e calculado com pyotp.
+    """
+    import pyotp
+
+    from usuarios.dois_fatores import _decifrar
+    from usuarios.models import SegundoFator
+
+    login = client.post('/api/v1/auth/login', {'email': email, 'password': senha}).json()['data']
+    token = login['mfa_token']
+    if login['mfa_setup_required']:
+        segredo = client.post('/api/v1/auth/2fa/setup', {'mfa_token': token}).json()['data']['secret']
+        codigo = pyotp.TOTP(segredo).now()
+        return client.post('/api/v1/auth/2fa/activate', {'mfa_token': token, 'code': codigo}).json()['data']
+    fator = SegundoFator.objects.get(usuario__email__iexact=email)
+    # Passo seguinte ao ultimo usado: evita "codigo reutilizado" em testes rapidos.
+    passo = max((fator.ultimo_passo or 0) + 1, int(__import__('time').time()) // 30)
+    codigo = pyotp.TOTP(_decifrar(fator.segredo_cifrado)).at(passo * 30)
+    return client.post('/api/v1/auth/2fa/verify', {'mfa_token': token, 'code': codigo}).json()['data']

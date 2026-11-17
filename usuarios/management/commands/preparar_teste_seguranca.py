@@ -15,6 +15,11 @@ Uso:
     python manage.py preparar_teste_seguranca
 
 A senha vem da variavel TESTE_SENHA e nunca fica no codigo.
+
+Depois do 2FA: defina tambem TESTE_TOTP_SEGREDO (um segredo base32, ex.: gerado
+com  python -c "import pyotp; print(pyotp.random_base32())"). Os dois usuarios
+ficam com o 2FA ATIVO usando esse segredo, e os scripts de teste calculam o
+codigo com ele. Cadastre o mesmo segredo num autenticador se quiser ver os codigos.
 """
 
 import os
@@ -29,10 +34,11 @@ from django.utils import timezone
 from dominio.models import Fruit, Location, Vehicle
 from iot.models import Device, Reading
 from transporte.models import FinalInspection, Shipment, ShipmentItem
+from usuarios.dois_fatores import _cifrar
+from usuarios.models import CodigoRecuperacao, SegundoFator
 
-# Grupo que os usuarios de teste recebem. Antes dos controles e "Operador",
-# que pode ver, alterar, iniciar e encerrar viagens.
-GRUPO_TESTE = 'Operador'
+# Grupo que os usuarios de teste recebem: Vendedor (cria e comanda as proprias viagens).
+GRUPO_TESTE = 'Vendedor'
 
 USUARIOS = [
     # (letra, e-mail, placa, placa do veiculo)
@@ -71,8 +77,20 @@ class Command(BaseCommand):
         usuario.save()
         usuario.groups.set([grupo])
 
+        # 2FA dos usuarios de teste (so quando TESTE_TOTP_SEGREDO estiver definido).
+        segredo = os.environ.get('TESTE_TOTP_SEGREDO', '').strip().upper()
+        if segredo:
+            SegundoFator.objects.update_or_create(
+                usuario=usuario,
+                defaults={'segredo_cifrado': _cifrar(segredo), 'ativo': True,
+                          'ultimo_passo': None, 'ativado_em': timezone.now()},
+            )
+            CodigoRecuperacao.objects.filter(usuario=usuario).delete()
+
         # 2) Placa, locais e veiculo do usuario.
         placa, _ = Device.objects.get_or_create(uid=uid, defaults={'name': f'Placa de teste {letra}'})
+        placa.owner = usuario  # a placa de teste e do proprio vendedor
+        placa.save(update_fields=['owner'])
         origem, _ = Location.objects.get_or_create(name=f'Fazenda Teste {letra}', defaults={'type': 'farm'})
         destino, _ = Location.objects.get_or_create(
             name=f'CD Teste {letra}', defaults={'type': 'distribution_center'},

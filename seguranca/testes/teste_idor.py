@@ -12,6 +12,8 @@ Resultado esperado:
 
 Uso (PowerShell, na raiz do projeto):
     $env:TESTE_SENHA = "..."; $env:MISSAO = "XXXXXX"
+    $env:TESTE_TOTP_SEGREDO = "..."   (depois do 2FA: o login dos usuarios de teste pede o codigo)
+    python manage.py preparar_teste_seguranca
     python seguranca/testes/teste_idor.py
 """
 

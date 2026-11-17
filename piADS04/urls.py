@@ -34,6 +34,7 @@ urlpatterns = [
     path('api/v1/', include('iot.urls')),
     path('api/v1/', include('transporte.urls')),
     path('api/v1/', include('alertas.urls')),
+    path('api/v1/', include('assistente.urls')),
 
     path('api/schema/', SpectacularAPIView.as_view(
         permission_classes=permissao_docs, authentication_classes=autenticacao_docs), name='schema'),

@@ -6,6 +6,7 @@ Tudo o que muda de uma maquina para outra, ou que e segredo, vem do arquivo
 .env (lido pelo python-decouple). Veja o .env.example para a lista de variaveis.
 """
 
+import sys
 from datetime import timedelta
 from pathlib import Path
 
@@ -64,6 +65,14 @@ else:
     SECURE_HSTS_INCLUDE_SUBDOMAINS = False
     SECURE_HSTS_PRELOAD = False
 
+# Testes automatizados (python manage.py test): o cliente de teste do Django
+# faz as requisicoes em http, entao o redirecionamento para https faria toda
+# resposta virar 301. So o redirecionamento e desligado; o resto fica igual
+# a producao, para os testes valerem com DEBUG=False.
+TESTANDO = len(sys.argv) > 1 and sys.argv[1] == 'test'
+if TESTANDO:
+    SECURE_SSL_REDIRECT = False
+
 
 # --- Apps ------------------------------------------------------------------
 
@@ -85,6 +94,7 @@ INSTALLED_APPS = [
 
     # Apps do projeto
     'usuarios',
+    'assistente',
     'dominio',
     'transporte',
     'iot',
@@ -141,6 +151,10 @@ REST_FRAMEWORK = {
     'login': config('THROTTLE_LOGIN', default='10/min'),
     'iot': config('THROTTLE_IOT', default='120/min'),
     'password_reset': config('THROTTLE_PASSWORD_RESET', default='5/hour'),
+    # Tentativas do codigo 2FA (impede chutar os 6 digitos).
+    'mfa': config('THROTTLE_MFA', default='10/min'),
+    # Mensagens no chat por usuario (economiza a cota gratuita do Gemini).
+    'chat': config('THROTTLE_CHAT', default='5/min'),
 },
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
@@ -151,6 +165,47 @@ REST_FRAMEWORK = {
 DEVICE_ONLINE_TOLERANCE_MINUTES = config('DEVICE_ONLINE_TOLERANCE_MINUTES', default=10, cast=int)
 # Maximo de itens (leituras + impactos) por lote enviado pela placa.
 IOT_MAX_BATCH_ITEMS = config('IOT_MAX_BATCH_ITEMS', default=200, cast=int)
+
+
+# --------------------------------------------------
+# SEGURANCA (trabalho de ciberseguranca: 2FA e IDOR)
+# --------------------------------------------------
+
+# Codigo de missao da equipe: aparece nos logs quando um controle bloqueia algo.
+SECURITY_MISSION_CODE = config('SECURITY_MISSION_CODE', default='SEM-CODIGO')
+
+# 2FA (TOTP): quantos intervalos de 30 s antes/depois do atual ainda valem.
+# 1 = aceita o codigo anterior e o proximo (tolera relogio do celular ~30 s fora).
+OTP_VALID_WINDOW = config('OTP_VALID_WINDOW', default=1, cast=int)
+# Tempo (s) para digitar o codigo depois da senha.
+MFA_TOKEN_MAX_AGE = config('MFA_TOKEN_MAX_AGE', default=300, cast=int)
+# Nome que aparece no aplicativo autenticador.
+OTP_ISSUER = config('OTP_ISSUER', default='Caminho do Vale')
+# Chave (Fernet) que cifra os segredos TOTP no banco. Vazia = derivada da SECRET_KEY.
+OTP_ENCRYPTION_KEY = config('OTP_ENCRYPTION_KEY', default='')
+
+# Chat com o Gemini (plano gratuito). A chave so existe no .env / Render.
+GEMINI_API_KEY = config('GEMINI_API_KEY', default='')
+GEMINI_MODEL = config('GEMINI_MODEL', default='gemini-3.5-flash-lite')
+GEMINI_THINKING_LEVEL = config('GEMINI_THINKING_LEVEL', default='minimal')  # vazio = nao envia
+GEMINI_MAX_OUTPUT_TOKENS = config('GEMINI_MAX_OUTPUT_TOKENS', default=512, cast=int)
+GEMINI_TIMEOUT_S = config('GEMINI_TIMEOUT_S', default=20, cast=int)
+
+# Log dos eventos de seguranca (logger "seguranca") no console: o Render mostra em Logs.
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'seguranca': {'format': '%(asctime)s %(levelname)s %(message)s'},
+    },
+    'handlers': {
+        'console': {'class': 'logging.StreamHandler', 'formatter': 'seguranca'},
+    },
+    'loggers': {
+        'seguranca': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+        'assistente': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+    },
+}
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=30),
