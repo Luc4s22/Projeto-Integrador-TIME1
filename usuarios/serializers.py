@@ -4,7 +4,14 @@ from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 
 # Nome do grupo no Django -> "role" que o front recebe (JSON 1 do plano).
-ROLES = {'Administrador': 'admin', 'Operador': 'operator', 'Visualizador': 'viewer'}
+ROLES = {
+    'Administrador': 'admin',
+    'Vendedor': 'seller',
+    'Comprador': 'buyer',
+    'Motorista': 'driver',
+    'Operador': 'operator',
+    'Visualizador': 'viewer',
+}
 
 
 def role_do_usuario(usuario):

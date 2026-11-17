@@ -54,6 +54,42 @@ def permissoes_do_operador():
     return permissoes.filter(codename__in=codenames)
 
 
+def _ver_tudo_mais(adicionar_e_editar=(), editar=(), adicionar=()):
+    """Monta um grupo: ver (view_) tudo + as acoes listadas."""
+    permissoes = permissoes_do_projeto()
+    codenames = {p.codename for p in permissoes if p.codename.startswith('view_')}
+    for modelo in adicionar_e_editar:
+        codenames |= {f'add_{modelo}', f'change_{modelo}'}
+    codenames |= {f'change_{modelo}' for modelo in editar}
+    codenames |= {f'add_{modelo}' for modelo in adicionar}
+    return permissoes.filter(codename__in=codenames)
+
+
+# "Ver tudo" aqui e so a permissao de TIPO (pode ver viagens). QUAIS viagens cada um
+# ve e decidido pela protecao contra IDOR (dono da viagem/placa), nas views.
+
+def permissoes_do_vendedor():
+    """Vendedor: monta a carga e a viagem; cadastra fazendas e veiculos; cuida da placa dele."""
+    return _ver_tudo_mais(
+        adicionar_e_editar=['shipment', 'shipmentitem', 'location', 'vehicle'],
+        editar=['alert', 'device'],
+    )
+
+
+def permissoes_do_comprador():
+    """Comprador: acompanha a compra e confirma o recebimento (avaliacao com fotos)."""
+    return _ver_tudo_mais(
+        adicionar_e_editar=['location'],
+        editar=['alert'],
+        adicionar=['finalinspection', 'inspectionphoto'],
+    )
+
+
+def permissoes_do_motorista():
+    """Motorista: so ve e, para iniciar/finalizar, precisa de change_shipment."""
+    return _ver_tudo_mais(editar=['shipment'])
+
+
 def permissoes_do_visualizador():
     """Visualizador: so consulta (view_) tudo."""
     return permissoes_do_projeto().filter(codename__startswith='view_')
@@ -61,13 +97,16 @@ def permissoes_do_visualizador():
 
 GRUPOS = {
     'Administrador': permissoes_do_administrador,
+    'Vendedor': permissoes_do_vendedor,
+    'Comprador': permissoes_do_comprador,
+    'Motorista': permissoes_do_motorista,
     'Operador': permissoes_do_operador,
     'Visualizador': permissoes_do_visualizador,
 }
 
 
 class Command(BaseCommand):
-    help = 'Cria os grupos Administrador, Operador e Visualizador com suas permissoes.'
+    help = 'Cria os grupos (Administrador, Vendedor, Comprador, Motorista, Operador, Visualizador).'
 
     def handle(self, *args, **options):
         for nome, obter_permissoes in GRUPOS.items():

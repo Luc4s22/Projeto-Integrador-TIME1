@@ -17,6 +17,8 @@ class Shipment(models.Model):
     STATUS_CHOICES = [
         ('planned', 'Planejada'),
         ('active', 'Em andamento'),
+        # O motorista finalizou a viagem; falta o comprador confirmar o recebimento.
+        ('delivered', 'Entregue, aguardando confirmação'),
         ('completed', 'Concluída'),
         ('cancelled', 'Cancelada'),
     ]
@@ -51,6 +53,26 @@ class Shipment(models.Model):
         null=True,
         blank=True,
         related_name='shipments_created'
+    )
+
+    # Os tres "donos" da viagem. O vendedor e quem cria (created_by).
+    # Sao eles que a protecao contra IDOR usa para decidir quem ve e comanda a viagem.
+    buyer = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='shipments_bought',
+        help_text='Comprador: acompanha a viagem e confirma o recebimento.'
+    )
+
+    driver = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name='shipments_driven',
+        help_text='Motorista: inicia e finaliza a viagem.'
     )
 
     status = models.CharField(

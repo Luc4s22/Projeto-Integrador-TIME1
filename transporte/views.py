@@ -40,7 +40,7 @@ from iot.serializers import (
 )
 from iot.views import ReadingFilter
 
-from usuarios.permissions import PodeAlterarModelo
+from usuarios.permissions import PodeAlterarModelo, PodeConfirmarEntrega
 
 from .models import (
     Shipment,
@@ -316,31 +316,69 @@ class ShipmentViewSet(viewsets.ModelViewSet):
         detail=True,
         methods=['post'],
         permission_classes=[PodeAlterarModelo],
+    )
+    def finish(self, request, pk=None):
+        """
+        O motorista avisa que chegou: active -> delivered.
+
+        A viagem ainda nao esta concluida: falta o comprador confirmar
+        o recebimento (rota /confirm). A placa para de gravar leituras
+        novas, mas o que ficou na fila offline dela ainda e aceito.
+        """
+
+        with transaction.atomic():
+            viagem = (
+                Shipment.objects
+                .select_for_update()
+                .get(pk=self.get_object().pk)
+            )
+
+            if viagem.status != 'active':
+                return Response(
+                    {'detail': 'Só é possível finalizar uma viagem em andamento.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            viagem.status = 'delivered'
+            viagem.ended_at = timezone.now()
+            viagem.save(update_fields=['status', 'ended_at', 'updated_at'])
+
+        return Response(self.get_serializer(viagem).data)
+
+    # =====================================================
+    # CONFIRMAR RECEBIMENTO (COMPRADOR)
+    # =====================================================
+
+    @action(
+        detail=True,
+        methods=['post'],
+        permission_classes=[PodeConfirmarEntrega],
         parser_classes=[
             MultiPartParser,
             FormParser,
             JSONParser,
         ],
     )
-    def finish(self, request, pk=None):
+    def confirm(self, request, pk=None):
         """
-        Finaliza uma viagem em andamento.
+        O comprador confirma o recebimento: delivered -> completed.
 
         Recebe:
         - condition: good, damaged ou critical.
         - notes: observações da chegada.
-        - photos: arquivos JPEG/PNG opcionais.
+        - photos: arquivos JPEG/PNG. Opcionais quando a carga chegou
+          boa; obrigatórios quando há avaria (servem de prova).
 
         As fotografias são armazenadas no Cloudinary.
         """
 
         viagem_atual = self.get_object()
 
-        if viagem_atual.status != 'active':
+        if viagem_atual.status != 'delivered':
             return Response(
                 {
                     'detail':
-                    'Só é possível finalizar uma viagem em andamento.'
+                    'Só é possível confirmar uma viagem entregue pelo motorista.'
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
@@ -391,6 +429,15 @@ class ShipmentViewSet(viewsets.ModelViewSet):
         # -------------------------------------------------
 
         fotos = request.FILES.getlist('photos')
+
+        if condition != 'good' and not fotos:
+            return Response(
+                {
+                    'detail':
+                    'Com avaria, envie ao menos uma fotografia como prova.'
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         if len(fotos) > 10:
             return Response(
@@ -484,7 +531,7 @@ class ShipmentViewSet(viewsets.ModelViewSet):
                     .get(pk=viagem_atual.pk)
                 )
 
-                if viagem.status != 'active':
+                if viagem.status != 'delivered':
                     viagem_ja_encerrada = True
 
                 else:
@@ -504,12 +551,10 @@ class ShipmentViewSet(viewsets.ModelViewSet):
                     ])
 
                     viagem.status = 'completed'
-                    viagem.ended_at = timezone.now()
 
                     viagem.save(
                         update_fields=[
                             'status',
-                            'ended_at',
                             'updated_at',
                         ]
                     )

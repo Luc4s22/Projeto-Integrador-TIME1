@@ -128,9 +128,14 @@ class ShipmentLifecycleTest(APITestCase):
             'active'
         )
 
-        # Finalizar viagem com avaliação obrigatória
-        resposta_fim = self.client.post(
-            f'{url}/finish',
+        # Motorista finaliza: a viagem fica "entregue, aguardando confirmação"
+        resposta_fim = self.client.post(f'{url}/finish')
+        self.assertEqual(resposta_fim.status_code, 200, resposta_fim.data)
+        self.assertEqual(resposta_fim.data['status'], 'delivered')
+
+        # Comprador confirma o recebimento com a avaliação
+        resposta_confirmacao = self.client.post(
+            f'{url}/confirm',
             {
                 'condition': 'good',
                 'notes': 'Frutas entregues em boas condições.'
@@ -139,9 +144,9 @@ class ShipmentLifecycleTest(APITestCase):
         )
 
         self.assertEqual(
-            resposta_fim.status_code,
+            resposta_confirmacao.status_code,
             200,
-            resposta_fim.data
+            resposta_confirmacao.data
         )
 
         # Conferir o estado atualizado no banco
@@ -331,3 +336,65 @@ class ShipmentCreateWithItemsTest(APITestCase):
             Shipment.objects.count(),
             quantidade_antes
         )
+
+
+class FluxoEntregaTest(APITestCase):
+    """
+    Fluxo novo: o motorista finaliza (active -> delivered) e o comprador
+    confirma o recebimento (delivered -> completed).
+    """
+
+    def setUp(self):
+        from django.core.management import call_command
+        call_command('criar_grupos', verbosity=0)
+        self.c = montar_cenario()
+        self.url = f"/api/v1/shipments/{self.c['viagem'].id}"
+        self.motorista = self._usuario('motorista', 'Motorista')
+        self.comprador = self._usuario('comprador', 'Comprador')
+
+    def _usuario(self, nome, grupo):
+        from django.contrib.auth.models import Group
+        usuario = User.objects.create_user(nome, f'{nome}@teste.local', 'senha-de-teste-123')
+        usuario.groups.add(Group.objects.get(name=grupo))
+        return usuario
+
+    def test_motorista_finaliza_e_viagem_fica_entregue(self):
+        self.client.force_authenticate(self.motorista)
+        resposta = self.client.post(f'{self.url}/finish')
+        self.assertEqual(resposta.status_code, 200, resposta.data)
+        self.assertEqual(resposta.data['status'], 'delivered')
+        self.assertIsNotNone(Shipment.objects.get(pk=self.c['viagem'].id).ended_at)
+
+    def test_motorista_nao_confirma_recebimento(self):
+        self.client.force_authenticate(self.motorista)
+        self.client.post(f'{self.url}/finish')
+        resposta = self.client.post(f'{self.url}/confirm', {'condition': 'good'}, format='json')
+        self.assertEqual(resposta.status_code, 403)
+
+    def test_comprador_confirma_e_viagem_conclui(self):
+        Shipment.objects.filter(pk=self.c['viagem'].id).update(status='delivered')
+        self.client.force_authenticate(self.comprador)
+        resposta = self.client.post(f'{self.url}/confirm', {'condition': 'good'}, format='json')
+        self.assertEqual(resposta.status_code, 200, resposta.data)
+        self.assertEqual(Shipment.objects.get(pk=self.c['viagem'].id).status, 'completed')
+        self.assertTrue(FinalInspection.objects.filter(shipment=self.c['viagem']).exists())
+
+    def test_avaria_sem_foto_e_recusada(self):
+        Shipment.objects.filter(pk=self.c['viagem'].id).update(status='delivered')
+        self.client.force_authenticate(self.comprador)
+        resposta = self.client.post(f'{self.url}/confirm', {'condition': 'damaged'}, format='json')
+        self.assertEqual(resposta.status_code, 400)
+        self.assertEqual(Shipment.objects.get(pk=self.c['viagem'].id).status, 'delivered')
+
+    def test_nao_confirma_viagem_ainda_em_andamento(self):
+        self.client.force_authenticate(self.comprador)
+        resposta = self.client.post(f'{self.url}/confirm', {'condition': 'good'}, format='json')
+        self.assertEqual(resposta.status_code, 400)
+
+    def test_motorista_da_viagem_precisa_ter_papel_motorista(self):
+        admin = User.objects.create_superuser('plataforma', 'plataforma@teste.local', 'senha-de-teste-123')
+        self.client.force_authenticate(admin)
+        resposta = self.client.patch(self.url, {'driver': self.comprador.id}, format='json')
+        self.assertEqual(resposta.status_code, 400)
+        resposta = self.client.patch(self.url, {'driver': self.motorista.id, 'buyer': self.comprador.id}, format='json')
+        self.assertEqual(resposta.status_code, 200, resposta.data)

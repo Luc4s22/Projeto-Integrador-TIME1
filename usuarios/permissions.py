@@ -45,3 +45,18 @@ class PodeAlterarModelo(PermissaoPorModelo):
         **PermissaoPorModelo.perms_map,
         'POST': ['%(app_label)s.change_%(model_name)s'],
     }
+
+
+class PodeConfirmarEntrega(PermissaoPorModelo):
+    """
+    Confirmar o recebimento (POST /shipments/{id}/confirm) cria a avaliacao de
+    chegada, entao exige `transporte.add_finalinspection` -- permissao que so o
+    grupo Comprador (e o Administrador) recebe.
+    """
+
+    def has_permission(self, request, view):
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and request.user.has_perm('transporte.add_finalinspection')
+        )
