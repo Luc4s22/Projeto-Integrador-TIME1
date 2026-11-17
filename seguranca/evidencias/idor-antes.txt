@@ -1,0 +1,21 @@
+﻿========================================================================
+[SEM-CODIGO] Teste IDOR - usuario A tentando usar a placa e a viagem do usuario B
+API: https://projeto-integrador-time1.onrender.com/api/v1
+Data: 17/11/2026 10:54:57
+========================================================================
+Recursos do B: viagem id=13, placa id=4
+
+Tentativas do usuario A (deveriam ser recusadas):
+ 200  VULNERAVEL                 ler a viagem do B        GET  /shipments/13
+ 200  VULNERAVEL                 ler o resumo do B        GET  /shipments/13/summary
+ 200  VULNERAVEL                 ler as leituras do B     GET  /shipments/13/readings
+ 200  VULNERAVEL                 ler a placa do B         GET  /devices/4
+ 200  VULNERAVEL                 alterar a viagem do B    PATCH /shipments/13
+ 200  VULNERAVEL                 comandar (encerrar) B    POST /shipments/13/finish
+
+O dono (usuario B) continua usando normalmente:
+ 200  OK (dono usa normalmente)  B le a propria viagem    GET  /shipments/13
+
+------------------------------------------------------------------------
+RESULTADO: VULNERAVEL - 6 de 6 tentativas do A passaram.
+Para repetir: python manage.py preparar_teste_seguranca (reabre a viagem do B).

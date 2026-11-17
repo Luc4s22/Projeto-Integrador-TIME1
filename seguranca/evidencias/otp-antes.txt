@@ -1,0 +1,11 @@
+﻿========================================================================
+[SEM-CODIGO] Teste OTP - login so com e-mail e senha, sem segundo fator
+API: https://projeto-integrador-time1.onrender.com/api/v1
+Data: 17/11/2026 10:57:57
+========================================================================
+POST /auth/login (so senha) -> 200
+O servidor devolveu o token de acesso sem pedir codigo do autenticador.
+GET /auth/me com esse token -> 200 (usuario: vendedor-a@teste.local)
+
+------------------------------------------------------------------------
+RESULTADO: VULNERAVEL - senha correta basta para entrar na conta.
