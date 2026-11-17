@@ -9,9 +9,11 @@ class DeviceSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Device
-        fields = ['id', 'uid', 'name', 'is_active', 'online', 'last_seen_at',
+        fields = ['id', 'uid', 'name', 'owner', 'is_active', 'online', 'last_seen_at',
                   'last_connection_type', 'wifi_ssid', 'created_at']
-        read_only_fields = ['id', 'online', 'last_seen_at', 'last_connection_type', 'wifi_ssid', 'created_at']
+        # O dono so e definido pela plataforma (admin do Django): ninguem "pega"
+        # a placa de outro mudando o owner pela API.
+        read_only_fields = ['id', 'owner', 'online', 'last_seen_at', 'last_connection_type', 'wifi_ssid', 'created_at']
 
 
 class ReadingSerializer(serializers.ModelSerializer):

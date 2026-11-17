@@ -73,7 +73,7 @@ class TelemetryBatchView(DeviceAPIView):
         # A viagem tem que ser DESTA placa. Aceita viagem ativa ou ja concluida
         # (dado que ficou na fila offline e chegou depois do fim da viagem).
         viagem = Shipment.objects.filter(
-            pk=dados['shipment_id'], device=dispositivo, status__in=['active', 'completed'],
+            pk=dados['shipment_id'], device=dispositivo, status__in=['active', 'delivered', 'completed'],
         ).first()
         if viagem is None:
             return Response({'detail': 'Viagem inexistente, de outro dispositivo ou ainda não iniciada.'},

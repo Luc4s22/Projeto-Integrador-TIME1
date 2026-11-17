@@ -5,7 +5,8 @@ from .models import Device, DeviceCredential, Reading, ShockEvent
 
 @admin.register(Device)
 class DeviceAdmin(admin.ModelAdmin):
-    list_display = ['name', 'uid', 'is_active', 'last_seen_at', 'last_connection_type']
+    list_display = ['name', 'uid', 'owner', 'is_active', 'last_seen_at', 'last_connection_type']
+    list_select_related = ['owner']
     search_fields = ['name', 'uid']
 
 

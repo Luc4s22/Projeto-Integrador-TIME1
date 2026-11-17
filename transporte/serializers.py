@@ -35,7 +35,7 @@ class ShipmentItemSerializer(serializers.ModelSerializer):
             getattr(self.instance, 'fruit', None)
         )
 
-        if viagem.status in ('completed', 'cancelled'):
+        if viagem.status in ('delivered', 'completed', 'cancelled'):
             raise serializers.ValidationError(
                 'Não é possível alterar a carga de uma viagem concluída ou cancelada.'
             )
@@ -94,6 +94,8 @@ class ShipmentSerializer(serializers.ModelSerializer):
             'vehicle',
             'device',
             'created_by',
+            'buyer',
+            'driver',
             'status',
             'started_at',
             'ended_at',
@@ -117,6 +119,13 @@ class ShipmentSerializer(serializers.ModelSerializer):
                 campo,
                 getattr(self.instance, campo, None)
             )
+
+        # Comprador e motorista precisam ter o papel certo: impede, por
+        # exemplo, colocar outro vendedor como "motorista" da viagem.
+        for campo, grupo in (('buyer', 'Comprador'), ('driver', 'Motorista')):
+            usuario = dados.get(campo)
+            if usuario is not None and not usuario.groups.filter(name=grupo).exists():
+                raise serializers.ValidationError({campo: f'O usuário escolhido não tem o papel {grupo}.'})
 
         if valor('origin') == valor('destination'):
             raise serializers.ValidationError(

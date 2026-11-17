@@ -15,6 +15,11 @@ class Device(models.Model):
 
     uid = models.CharField(max_length=100, unique=True, help_text='Identificador gravado na placa (ex.: VSF-001).')
     name = models.CharField(max_length=100)
+    # Vendedor dono da placa. Quem cadastra e vincula e a plataforma (superusuario).
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+        related_name='devices', help_text='Vendedor dono da placa.',
+    )
     is_active = models.BooleanField(default=True)
     last_seen_at = models.DateTimeField(null=True, blank=True, help_text='Ultima comunicacao da placa com a API.')
     last_connection_type = models.CharField(max_length=10, choices=CONNECTION_CHOICES, blank=True)
