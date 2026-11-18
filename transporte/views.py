@@ -24,6 +24,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from rest_framework import status, viewsets
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.decorators import action
 from rest_framework.parsers import (
     MultiPartParser,
@@ -40,6 +41,13 @@ from iot.serializers import (
 )
 from iot.views import ReadingFilter
 
+from usuarios.acesso import (
+    ProtecaoDonoMixin,
+    eh_plataforma,
+    pela_viagem_visivel,
+    registrar_bloqueio,
+    viagens_visiveis,
+)
 from usuarios.permissions import PodeAlterarModelo, PodeConfirmarEntrega
 
 from .models import (
@@ -164,7 +172,16 @@ def excluir_uploads_cloudinary(public_ids):
 # VIEWSET DAS VIAGENS
 # =========================================================
 
-class ShipmentViewSet(viewsets.ModelViewSet):
+def eh_vendedor_da_viagem(usuario, viagem):
+    """Quem pode ALTERAR a viagem: quem criou (vendedor), o dono da placa ou a plataforma."""
+    return (
+        eh_plataforma(usuario)
+        or viagem.created_by_id == usuario.id
+        or viagem.device.owner_id == usuario.id
+    )
+
+
+class ShipmentViewSet(ProtecaoDonoMixin, viewsets.ModelViewSet):
 
     queryset = (
         Shipment.objects
@@ -185,6 +202,8 @@ class ShipmentViewSet(viewsets.ModelViewSet):
         'device',
         'origin',
         'destination',
+        'buyer',
+        'driver',
     ]
 
     ordering_fields = [
@@ -192,10 +211,85 @@ class ShipmentViewSet(viewsets.ModelViewSet):
         'created_at',
     ]
 
+    # -----------------------------------------------------
+    # PROTECAO CONTRA IDOR
+    # -----------------------------------------------------
+
+    def filtrar_por_dono(self, usuario, queryset):
+        """So as viagens em que o usuario e vendedor, comprador, motorista ou dono da placa."""
+        return viagens_visiveis(usuario, queryset)
+
+    def exigir_papel_na_viagem(self, viagem, permitido):
+        """
+        Segunda camada: o usuario VE a viagem (e participante), mas nem todo
+        participante pode tudo. Ex.: o motorista ve a viagem, mas nao pode
+        alterar origem/destino; o comprador nao inicia a viagem.
+        Quem pode ver mas nao pode agir recebe 403.
+        """
+        if not permitido:
+            registrar_bloqueio(self.request, 'shipment', viagem.pk, motivo='papel sem permissao nesta viagem')
+            raise PermissionDenied('Você não tem permissão para esta ação nesta viagem.')
+
+    def perform_update(self, serializer):
+        viagem = serializer.instance
+        self.exigir_papel_na_viagem(viagem, eh_vendedor_da_viagem(self.request.user, viagem))
+        if 'device' in serializer.validated_data:
+            self.exigir_placa_propria(serializer.validated_data['device'])
+        self.exigir_cadastros_proprios(serializer.validated_data, atual=viagem)
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        self.exigir_papel_na_viagem(instance, eh_vendedor_da_viagem(self.request.user, instance))
+        instance.delete()
+
+    # -----------------------------------------------------
+    # MINHA VIAGEM (PWA DO MOTORISTA)
+    # -----------------------------------------------------
+
+    @action(detail=False, methods=['get'])
+    def current(self, request):
+        """
+        GET /shipments/current -> viagens que o usuario esta conduzindo agora
+        (motorista): planejadas, em andamento ou entregues aguardando confirmacao.
+        """
+        viagens = (
+            self.get_queryset()
+            .filter(driver=request.user, status__in=['planned', 'active', 'delivered'])
+            .order_by('started_at')
+        )
+        return Response(self.get_serializer(viagens, many=True).data)
+
+    def exigir_placa_propria(self, placa):
+        """Ninguem monta viagem com a placa de outro vendedor (o ID da placa vem no corpo)."""
+        usuario = self.request.user
+        if not eh_plataforma(usuario) and placa.owner_id != usuario.id:
+            registrar_bloqueio(self.request, 'device', placa.pk, motivo='viagem com placa de outro usuario')
+            raise PermissionDenied('Esta placa não é sua.')
+
+    def exigir_cadastros_proprios(self, dados, atual=None):
+        """
+        Origem, destino e veiculo tambem vem no CORPO (IDs). So podem ser usados
+        os cadastros do proprio usuario ou os compartilhados (sem dono). Na
+        edicao, so confere o que mudou.
+        """
+        usuario = self.request.user
+        if eh_plataforma(usuario):
+            return
+        for campo, recurso in (('origin', 'location'), ('destination', 'location'), ('vehicle', 'vehicle')):
+            objeto = dados.get(campo)
+            if objeto is None or (atual is not None and getattr(atual, f'{campo}_id') == objeto.pk):
+                continue
+            if objeto.owner_id is not None and objeto.owner_id != usuario.id:
+                registrar_bloqueio(self.request, recurso, objeto.pk, motivo=f'viagem com {campo} de outro usuario')
+                raise PermissionDenied('Use apenas locais e veículos cadastrados por você.')
+
     def perform_create(self, serializer):
         """
-        Registra o usuário responsável pela criação.
+        Registra o usuário responsável pela criação (o vendedor).
         """
+
+        self.exigir_placa_propria(serializer.validated_data['device'])
+        self.exigir_cadastros_proprios(serializer.validated_data)
 
         serializer.save(
             created_by=self.request.user
@@ -224,6 +318,11 @@ class ShipmentViewSet(viewsets.ModelViewSet):
         """
 
         viagem_atual = self.get_object()
+        usuario = request.user
+        self.exigir_papel_na_viagem(
+            viagem_atual,
+            viagem_atual.driver_id == usuario.id or eh_vendedor_da_viagem(usuario, viagem_atual),
+        )
 
         try:
             with transaction.atomic():
@@ -326,11 +425,18 @@ class ShipmentViewSet(viewsets.ModelViewSet):
         novas, mas o que ficou na fila offline dela ainda e aceito.
         """
 
+        viagem_atual = self.get_object()
+        usuario = request.user
+        self.exigir_papel_na_viagem(
+            viagem_atual,
+            viagem_atual.driver_id == usuario.id or eh_vendedor_da_viagem(usuario, viagem_atual),
+        )
+
         with transaction.atomic():
             viagem = (
                 Shipment.objects
                 .select_for_update()
-                .get(pk=self.get_object().pk)
+                .get(pk=viagem_atual.pk)
             )
 
             if viagem.status != 'active':
@@ -373,6 +479,10 @@ class ShipmentViewSet(viewsets.ModelViewSet):
         """
 
         viagem_atual = self.get_object()
+        self.exigir_papel_na_viagem(
+            viagem_atual,
+            viagem_atual.buyer_id == request.user.id or eh_plataforma(request.user),
+        )
 
         if viagem_atual.status != 'delivered':
             return Response(
@@ -690,7 +800,7 @@ class ShipmentViewSet(viewsets.ModelViewSet):
 # VIEWSET DOS ITENS DAS VIAGENS
 # =========================================================
 
-class ShipmentItemViewSet(viewsets.ModelViewSet):
+class ShipmentItemViewSet(ProtecaoDonoMixin, viewsets.ModelViewSet):
     """
     Gerencia as frutas e os lotes transportados.
     """
@@ -709,3 +819,28 @@ class ShipmentItemViewSet(viewsets.ModelViewSet):
         'shipment',
         'fruit',
     ]
+
+    def filtrar_por_dono(self, usuario, queryset):
+        return pela_viagem_visivel(usuario, queryset)
+
+    def _exigir_vendedor(self, viagem):
+        # Criar/alterar carga so na viagem do PROPRIO vendedor. A viagem vem do
+        # corpo da requisicao, entao conferimos aqui (o filtro do queryset so
+        # protege o ID da URL).
+        if not eh_vendedor_da_viagem(self.request.user, viagem):
+            registrar_bloqueio(self.request, 'shipment', viagem.pk, motivo='item em viagem de outro usuario')
+            raise PermissionDenied('Você não pode alterar a carga desta viagem.')
+
+    def perform_create(self, serializer):
+        self._exigir_vendedor(serializer.validated_data['shipment'])
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._exigir_vendedor(serializer.instance.shipment)
+        if 'shipment' in serializer.validated_data:
+            self._exigir_vendedor(serializer.validated_data['shipment'])
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        self._exigir_vendedor(instance.shipment)
+        instance.delete()

@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 from decouple import config
 
 from django.contrib.auth import get_user_model
+from django.db.models import Q
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.contrib.auth.tokens import default_token_generator
@@ -25,7 +26,11 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.exceptions import TokenError
 
-from .serializers import LoginSerializer, MeSerializer
+from django.conf import settings
+
+from . import dois_fatores
+from .permissions import PodeMontarViagem
+from .serializers import LoginSerializer, MeSerializer, emitir_tokens
 
 
 logger = logging.getLogger(__name__)
@@ -33,7 +38,15 @@ User = get_user_model()
 
 
 class LoginView(APIView):
-    """Login por e-mail e senha."""
+    """
+    Etapa 1 do login: e-mail e senha.
+
+    Com a senha certa, NAO devolve o token de acesso. Devolve um token
+    temporario (mfa_token) que so serve para a etapa 2:
+      - mfa_setup_required=true  -> primeiro acesso: cadastrar o autenticador
+        (POST /auth/2fa/setup e depois /auth/2fa/activate);
+      - mfa_setup_required=false -> informar o codigo (POST /auth/2fa/verify).
+    """
 
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -45,26 +58,197 @@ class LoginView(APIView):
         responses=inline_serializer(
             'LoginResponse',
             {
-                'access': serializers.CharField(),
-                'refresh': serializers.CharField(),
-                'user': inline_serializer(
-                    'LoginUser',
-                    {
-                        'id': serializers.IntegerField(),
-                        'name': serializers.CharField(),
-                        'email': serializers.EmailField(),
-                        'role': serializers.CharField(
-                            allow_null=True
-                        ),
-                    }
-                ),
+                'mfa_required': serializers.BooleanField(),
+                'mfa_setup_required': serializers.BooleanField(),
+                'mfa_token': serializers.CharField(),
+                'expires_in': serializers.IntegerField(),
             }
         )
     )
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        return Response(serializer.validated_data)
+        usuario = serializer.validated_data['usuario']
+        return Response({
+            'mfa_required': True,
+            'mfa_setup_required': not dois_fatores.tem_2fa_ativo(usuario),
+            'mfa_token': dois_fatores.criar_token_temporario(usuario),
+            'expires_in': settings.MFA_TOKEN_MAX_AGE,
+        })
+
+
+# ---------------------------------------------------------------------------
+# Etapa 2 do login: segundo fator (TOTP)
+# ---------------------------------------------------------------------------
+
+class TokenTemporarioInput(serializers.Serializer):
+    mfa_token = serializers.CharField()
+
+
+class CodigoInput(TokenTemporarioInput):
+    code = serializers.CharField(required=False, allow_blank=True)
+    recovery_code = serializers.CharField(required=False, allow_blank=True)
+
+
+class Etapa2FAView(APIView):
+    """Base das rotas /auth/2fa/*: sem JWT (ainda nao ha), com limite de tentativas."""
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'mfa'
+
+    def usuario_ou_erro(self, token):
+        usuario = dois_fatores.usuario_do_token(token, User)
+        if usuario is None:
+            return None, Response(
+                {'detail': 'Sessão de login expirada. Entre com e-mail e senha de novo.'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        return usuario, None
+
+
+class SetupView(Etapa2FAView):
+    """
+    POST /auth/2fa/setup {mfa_token}
+    Primeiro acesso: gera o segredo e devolve o QR Code para o aplicativo autenticador.
+    """
+
+    @extend_schema(request=TokenTemporarioInput)
+    def post(self, request):
+        entrada = TokenTemporarioInput(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        usuario, erro = self.usuario_ou_erro(entrada.validated_data['mfa_token'])
+        if erro:
+            return erro
+        if dois_fatores.tem_2fa_ativo(usuario):
+            # Impede que alguem com a senha "recadastre" o autenticador de outra pessoa.
+            dois_fatores.registrar_recusa(request, usuario, 'tentativa de recadastro com 2FA ativo')
+            return Response({'detail': 'O autenticador já está configurado nesta conta.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        return Response(dois_fatores.iniciar_cadastro(usuario))
+
+
+class ActivateView(Etapa2FAView):
+    """
+    POST /auth/2fa/activate {mfa_token, code}
+    Confirma o cadastro com o primeiro codigo do aplicativo. Devolve os tokens
+    e os 10 codigos de recuperacao (mostrados UMA vez).
+    """
+
+    @extend_schema(request=CodigoInput)
+    def post(self, request):
+        entrada = CodigoInput(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        usuario, erro = self.usuario_ou_erro(entrada.validated_data['mfa_token'])
+        if erro:
+            return erro
+        codigos = dois_fatores.ativar(usuario, entrada.validated_data.get('code'))
+        if codigos is None:
+            dois_fatores.registrar_recusa(request, usuario, 'codigo invalido na ativacao')
+            return Response({'detail': 'Código inválido.'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({**emitir_tokens(usuario), 'recovery_codes': codigos})
+
+
+class VerifyView(Etapa2FAView):
+    """
+    POST /auth/2fa/verify {mfa_token, code} ou {mfa_token, recovery_code}
+    Acessos seguintes: confere o codigo e, se valido, devolve os tokens.
+    """
+
+    @extend_schema(request=CodigoInput)
+    def post(self, request):
+        entrada = CodigoInput(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        usuario, erro = self.usuario_ou_erro(entrada.validated_data['mfa_token'])
+        if erro:
+            return erro
+        if not dois_fatores.tem_2fa_ativo(usuario):
+            return Response({'detail': 'Configure o autenticador primeiro (/auth/2fa/setup).'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        recuperacao = entrada.validated_data.get('recovery_code')
+        if recuperacao:
+            if dois_fatores.usar_codigo_recuperacao(usuario, recuperacao):
+                return Response(emitir_tokens(usuario))
+            dois_fatores.registrar_recusa(request, usuario, 'codigo de recuperacao invalido ou ja usado')
+            return Response({'detail': 'Código de recuperação inválido ou já utilizado.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        resultado = dois_fatores.verificar_codigo(usuario, entrada.validated_data.get('code'))
+        if resultado == 'ok':
+            return Response(emitir_tokens(usuario))
+        if resultado == 'reutilizado':
+            dois_fatores.registrar_recusa(request, usuario, 'codigo ja utilizado')
+            return Response({'detail': 'Este código já foi utilizado. Aguarde o próximo.'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        dois_fatores.registrar_recusa(request, usuario, 'codigo invalido ou vencido')
+        return Response({'detail': 'Código inválido ou vencido.'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class RecoveryCodesView(APIView):
+    """
+    POST /auth/2fa/recovery-codes {code}   (usuario ja logado, com JWT)
+    Gera codigos de recuperacao novos (os antigos deixam de valer). Pede um
+    codigo atual do aplicativo: quem roubou so o token nao consegue.
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'mfa'
+
+    @extend_schema(request=inline_serializer('RecoveryCodesInput', {'code': serializers.CharField()}))
+    def post(self, request):
+        if dois_fatores.verificar_codigo(request.user, request.data.get('code')) != 'ok':
+            dois_fatores.registrar_recusa(request, request.user, 'codigo invalido ao gerar codigos de recuperacao')
+            return Response({'detail': 'Código inválido.'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'recovery_codes': dois_fatores.gerar_codigos_recuperacao(request.user)})
+
+
+# ---------------------------------------------------------------------------
+# Lista de compradores e motoristas (formulario de viagem do vendedor)
+# ---------------------------------------------------------------------------
+
+GRUPO_DO_PAPEL = {'buyer': 'Comprador', 'driver': 'Motorista'}
+LIMITE_LISTA = 50
+
+
+class UsuarioResumoSerializer(serializers.Serializer):
+    """So id e nome: o minimo para o select do formulario (LGPD: sem e-mail)."""
+
+    id = serializers.IntegerField()
+    name = serializers.SerializerMethodField()
+
+    def get_name(self, usuario) -> str:
+        return usuario.get_full_name() or usuario.username
+
+
+class UsersView(APIView):
+    """
+    GET /auth/users?role=buyer|driver[&search=texto]
+
+    Para o vendedor escolher o comprador e o motorista ao montar a viagem.
+    - So quem pode criar viagem acessa (PodeMontarViagem).
+    - So usuarios ativos do grupo pedido; no maximo LIMITE_LISTA, por nome.
+    - Devolve so id e nome: nao expoe e-mail, telefone nem permissoes.
+    """
+
+    permission_classes = [PodeMontarViagem]
+
+    @extend_schema(responses=UsuarioResumoSerializer(many=True))
+    def get(self, request):
+        papel = request.query_params.get('role', '')
+        if papel not in GRUPO_DO_PAPEL:
+            return Response({'detail': 'Informe role=buyer ou role=driver.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        usuarios = User.objects.filter(is_active=True, groups__name=GRUPO_DO_PAPEL[papel])
+        busca = request.query_params.get('search', '').strip()[:100]
+        if busca:
+            usuarios = usuarios.filter(
+                Q(first_name__icontains=busca) | Q(last_name__icontains=busca) | Q(username__icontains=busca)
+            )
+        usuarios = usuarios.distinct().order_by('first_name', 'last_name', 'username')[:LIMITE_LISTA]
+        return Response(UsuarioResumoSerializer(usuarios, many=True).data)
 
 
 class MeView(APIView):

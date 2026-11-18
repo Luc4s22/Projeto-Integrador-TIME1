@@ -3,14 +3,19 @@ from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
+from usuarios.acesso import ProtecaoDonoMixin, pela_viagem_visivel
 from usuarios.permissions import PodeAlterarModelo
 
 from .models import Alert
 from .serializers import AlertSerializer
 
 
-class AlertViewSet(viewsets.ReadOnlyModelViewSet):
+class AlertViewSet(ProtecaoDonoMixin, viewsets.ReadOnlyModelViewSet):
     """Alertas gerados pelo sistema. So leitura, mais as acoes de reconhecer e resolver."""
+
+    def filtrar_por_dono(self, usuario, queryset):
+        # Alerta segue a viagem: so participantes da viagem veem, reconhecem e resolvem.
+        return pela_viagem_visivel(usuario, queryset)
 
     queryset = Alert.objects.select_related('shipment', 'acknowledged_by')
     serializer_class = AlertSerializer

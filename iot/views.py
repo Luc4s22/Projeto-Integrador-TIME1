@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from transporte.models import Shipment
+from usuarios.acesso import ProtecaoDonoMixin, pela_viagem_visivel, placas_visiveis
 from transporte.services import fruit_range
 
 from .authentication import DeviceKeyAuthentication, DeviceRateThrottle, IsDevice, registrar_contato
@@ -16,10 +17,14 @@ from .serializers import (
 from .services import process_batch
 
 
-class DeviceViewSet(viewsets.ModelViewSet):
+class DeviceViewSet(ProtecaoDonoMixin, viewsets.ModelViewSet):
     queryset = Device.objects.all()
     serializer_class = DeviceSerializer
     filterset_fields = ['is_active']
+
+    def filtrar_por_dono(self, usuario, queryset):
+        # Placa: so o dono (e a plataforma) ve e altera.
+        return placas_visiveis(usuario, queryset)
 
 
 class ReadingFilter(filters.FilterSet):
@@ -34,8 +39,12 @@ class ReadingFilter(filters.FilterSet):
         fields = ['device', 'shipment']
 
 
-class ReadingViewSet(viewsets.ReadOnlyModelViewSet):
+class ReadingViewSet(ProtecaoDonoMixin, viewsets.ReadOnlyModelViewSet):
     """Leituras: so consulta. Medicao historica nao se edita nem se apaga, e quem grava e a placa."""
+
+    def filtrar_por_dono(self, usuario, queryset):
+        # Leitura segue a viagem: quem ve a viagem ve as leituras dela.
+        return pela_viagem_visivel(usuario, queryset)
 
     queryset = Reading.objects.select_related('device')
     serializer_class = ReadingSerializer

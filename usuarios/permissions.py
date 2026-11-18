@@ -60,3 +60,18 @@ class PodeConfirmarEntrega(PermissaoPorModelo):
             and request.user.is_authenticated
             and request.user.has_perm('transporte.add_finalinspection')
         )
+
+
+class PodeMontarViagem(PermissaoPorModelo):
+    """
+    Listar compradores e motoristas (GET /auth/users) so serve para quem MONTA
+    viagens: exige `transporte.add_shipment` (Vendedor e Administrador).
+    Comprador e motorista nao precisam ver a lista de outros usuarios.
+    """
+
+    def has_permission(self, request, view):
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and request.user.has_perm('transporte.add_shipment')
+        )

@@ -5,14 +5,16 @@ from .models import Fruit, FruitParameter, Location, Vehicle
 
 @admin.register(Location)
 class LocationAdmin(admin.ModelAdmin):
-    list_display = ['name', 'type', 'is_active']
+    list_display = ['name', 'type', 'owner', 'is_active']
     list_filter = ['type', 'is_active']
+    list_select_related = ['owner']
     search_fields = ['name']
 
 
 @admin.register(Vehicle)
 class VehicleAdmin(admin.ModelAdmin):
-    list_display = ['plate', 'model', 'is_active']
+    list_display = ['plate', 'model', 'owner', 'is_active']
+    list_select_related = ['owner']
     search_fields = ['plate']
 
 
