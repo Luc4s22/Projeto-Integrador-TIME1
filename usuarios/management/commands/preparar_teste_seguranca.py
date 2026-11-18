@@ -10,6 +10,10 @@ viagem em andamento e algumas leituras:
 Pode rodar quantas vezes quiser: a viagem de cada um volta para "em andamento"
 (os testes encerram a viagem do B de proposito).
 
+Com --terceiro, cria tambem o vendedor-c@teste.local, SEM placa e SEM viagem
+(alteracao ao vivo: "um usuario novo nao enxerga os dispositivos dos outros";
+depois rode  python seguranca/testes/teste_terceiro_usuario.py).
+
 Uso:
     (PowerShell)  $env:TESTE_SENHA = "uma-senha-forte-so-de-teste"
     python manage.py preparar_teste_seguranca
@@ -45,10 +49,17 @@ USUARIOS = [
     ('A', 'vendedor-a@teste.local', 'TESTE-A', 'TST0A00'),
     ('B', 'vendedor-b@teste.local', 'TESTE-B', 'TST0B00'),
 ]
+TERCEIRO = ('C', 'vendedor-c@teste.local')  # sem placa e sem viagem
 
 
 class Command(BaseCommand):
     help = 'Cria os usuarios, placas, viagens e leituras sinteticos dos testes de seguranca.'
+
+    def add_arguments(self, parser):
+        parser.add_argument(
+            '--terceiro', action='store_true',
+            help='Cria tambem o vendedor-c@teste.local, sem placa e sem viagem.',
+        )
 
     def handle(self, *args, **options):
         senha = os.environ.get('TESTE_SENHA', '')
@@ -66,9 +77,13 @@ class Command(BaseCommand):
         with transaction.atomic():
             for letra, email, uid, placa_veiculo in USUARIOS:
                 self._preparar(letra, email, uid, placa_veiculo, senha, grupo, fruta)
+            if options['terceiro']:
+                letra, email = TERCEIRO
+                self._usuario(letra, email, senha, grupo)
+                self.stdout.write(self.style.SUCCESS(f'Usuario {letra}: {email} | sem placa e sem viagem'))
 
-    def _preparar(self, letra, email, uid, placa_veiculo, senha, grupo, fruta):
-        # 1) Usuario: e-mail e o login; a senha e redefinida a cada execucao.
+    def _usuario(self, letra, email, senha, grupo):
+        """Usuario de teste: e-mail e o login; senha (e 2FA) redefinidos a cada execucao."""
         usuario, _ = User.objects.get_or_create(
             username=email, defaults={'email': email, 'first_name': f'Vendedor {letra}'},
         )
@@ -86,6 +101,11 @@ class Command(BaseCommand):
                           'ultimo_passo': None, 'ativado_em': timezone.now()},
             )
             CodigoRecuperacao.objects.filter(usuario=usuario).delete()
+        return usuario
+
+    def _preparar(self, letra, email, uid, placa_veiculo, senha, grupo, fruta):
+        # 1) Usuario.
+        usuario = self._usuario(letra, email, senha, grupo)
 
         # 2) Placa, locais e veiculo do usuario.
         placa, _ = Device.objects.get_or_create(uid=uid, defaults={'name': f'Placa de teste {letra}'})
@@ -96,6 +116,10 @@ class Command(BaseCommand):
             name=f'CD Teste {letra}', defaults={'type': 'distribution_center'},
         )
         veiculo, _ = Vehicle.objects.get_or_create(plate=placa_veiculo, defaults={'model': 'Teste'})
+        # Locais e veiculo tambem sao do usuario (protecao contra IDOR nos cadastros).
+        for cadastro in (origem, destino, veiculo):
+            cadastro.owner = usuario
+            cadastro.save(update_fields=['owner'])
 
         # 3) Viagem do usuario (created_by = ele), sempre "em andamento".
         viagem = Shipment.objects.filter(device=placa, created_by=usuario).order_by('id').first()

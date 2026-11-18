@@ -12,3 +12,8 @@ staticfiles/
 piADS04/settings_teste_local.py
 *_backup.txt
 verificar_*.py
+
+# Material pessoal de estudo (nao vai para o repositorio)
+Claude outputs/
+seguranca/guia-apresentacao.md
+seguranca/testes/caminho-do-vale.http

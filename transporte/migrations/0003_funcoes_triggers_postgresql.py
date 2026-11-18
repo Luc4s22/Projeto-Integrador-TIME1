@@ -99,9 +99,12 @@ class Migration(migrations.Migration):
             'transporte',
             '0002_shipment_limits_snapshot_alter_shipment_started_at_and_more'
         ),
+        # As funcoes usam readings.shipment_id, criado em iot.0002_initial.
+        # Com 0001 a ordem so dava certo por acaso (num banco novo, a criacao
+        # das funcoes podia rodar antes da coluna existir).
         (
             'iot',
-            '0001_initial'
+            '0002_initial'
         ),
     ]
 

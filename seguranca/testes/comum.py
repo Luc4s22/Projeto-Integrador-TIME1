@@ -23,6 +23,7 @@ MISSAO = os.environ.get('MISSAO', 'SEM-CODIGO')
 
 USUARIO_A = 'vendedor-a@teste.local'
 USUARIO_B = 'vendedor-b@teste.local'
+USUARIO_C = 'vendedor-c@teste.local'  # criado com: preparar_teste_seguranca --terceiro
 
 TEMPO_LIMITE = 90  # o Render gratuito pode levar ~1 min para acordar
 PASSO_S = 30       # cada codigo TOTP vale 30 s

@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import F, Q
@@ -15,6 +16,12 @@ class Location(models.Model):
     name = models.CharField(max_length=150)
     type = models.CharField(max_length=30, choices=TYPE_CHOICES)
     address = models.CharField(max_length=255, blank=True)
+    # Quem cadastrou (vendedor ou comprador). Sem dono = cadastro COMPARTILHADO
+    # da plataforma: todos usam, so a plataforma altera. Ver usuarios/acesso.py.
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+        related_name='locations', help_text='Quem cadastrou o local (vazio = compartilhado).',
+    )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -29,6 +36,10 @@ class Location(models.Model):
 class Vehicle(models.Model):
     plate = models.CharField(max_length=10, unique=True)
     model = models.CharField(max_length=100, blank=True)
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+        related_name='vehicles', help_text='Vendedor dono do veiculo (vazio = compartilhado).',
+    )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

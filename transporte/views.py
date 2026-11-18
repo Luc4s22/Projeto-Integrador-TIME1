@@ -235,6 +235,7 @@ class ShipmentViewSet(ProtecaoDonoMixin, viewsets.ModelViewSet):
         self.exigir_papel_na_viagem(viagem, eh_vendedor_da_viagem(self.request.user, viagem))
         if 'device' in serializer.validated_data:
             self.exigir_placa_propria(serializer.validated_data['device'])
+        self.exigir_cadastros_proprios(serializer.validated_data, atual=viagem)
         serializer.save()
 
     def perform_destroy(self, instance):
@@ -265,12 +266,30 @@ class ShipmentViewSet(ProtecaoDonoMixin, viewsets.ModelViewSet):
             registrar_bloqueio(self.request, 'device', placa.pk, motivo='viagem com placa de outro usuario')
             raise PermissionDenied('Esta placa não é sua.')
 
+    def exigir_cadastros_proprios(self, dados, atual=None):
+        """
+        Origem, destino e veiculo tambem vem no CORPO (IDs). So podem ser usados
+        os cadastros do proprio usuario ou os compartilhados (sem dono). Na
+        edicao, so confere o que mudou.
+        """
+        usuario = self.request.user
+        if eh_plataforma(usuario):
+            return
+        for campo, recurso in (('origin', 'location'), ('destination', 'location'), ('vehicle', 'vehicle')):
+            objeto = dados.get(campo)
+            if objeto is None or (atual is not None and getattr(atual, f'{campo}_id') == objeto.pk):
+                continue
+            if objeto.owner_id is not None and objeto.owner_id != usuario.id:
+                registrar_bloqueio(self.request, recurso, objeto.pk, motivo=f'viagem com {campo} de outro usuario')
+                raise PermissionDenied('Use apenas locais e veículos cadastrados por você.')
+
     def perform_create(self, serializer):
         """
         Registra o usuário responsável pela criação (o vendedor).
         """
 
         self.exigir_placa_propria(serializer.validated_data['device'])
+        self.exigir_cadastros_proprios(serializer.validated_data)
 
         serializer.save(
             created_by=self.request.user

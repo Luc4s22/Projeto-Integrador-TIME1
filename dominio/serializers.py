@@ -6,15 +6,16 @@ from .models import Fruit, FruitParameter, Location, Vehicle
 class LocationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Location
-        fields = ['id', 'name', 'type', 'address', 'is_active', 'created_at']
-        read_only_fields = ['id', 'created_at']
+        fields = ['id', 'name', 'type', 'address', 'owner', 'is_active', 'created_at']
+        # owner vem do usuario do token: ninguem cadastra em nome de outro.
+        read_only_fields = ['id', 'owner', 'created_at']
 
 
 class VehicleSerializer(serializers.ModelSerializer):
     class Meta:
         model = Vehicle
-        fields = ['id', 'plate', 'model', 'is_active', 'created_at']
-        read_only_fields = ['id', 'created_at']
+        fields = ['id', 'plate', 'model', 'owner', 'is_active', 'created_at']
+        read_only_fields = ['id', 'owner', 'created_at']
 
 
 class FruitLimitsSerializer(serializers.ModelSerializer):

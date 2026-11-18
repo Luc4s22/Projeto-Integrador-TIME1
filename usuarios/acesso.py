@@ -14,6 +14,10 @@ Quem e dono:
     - viagem: o vendedor que criou (created_by), o comprador (buyer), o motorista
       (driver) e o dono da placa usada nela (device.owner);
     - placa: so o dono (owner);
+    - local e veiculo: quem cadastrou (owner); os SEM dono sao cadastros
+      compartilhados da plataforma (todos veem e usam, so a plataforma altera);
+      e tambem os que aparecem nas viagens que o usuario ja ve (ex.: o comprador
+      ve a fazenda de origem da compra dele, mas nao altera);
     - leituras, impactos, alertas e itens: seguem a viagem a que pertencem;
     - plataforma (superusuario ou grupo Administrador): ve tudo.
 """
@@ -60,6 +64,34 @@ def placas_visiveis(usuario, queryset):
     if eh_plataforma(usuario):
         return queryset
     return queryset.filter(owner=usuario)
+
+
+def locais_visiveis(usuario, queryset):
+    """Locais (fazendas, CDs): os proprios, os compartilhados e os das viagens que ele ve."""
+    if eh_plataforma(usuario):
+        return queryset
+    return queryset.filter(
+        Q(owner=usuario) | Q(owner__isnull=True)
+        | filtro_viagens(usuario, prefixo='shipments_from__')
+        | filtro_viagens(usuario, prefixo='shipments_to__')
+    ).distinct()
+
+
+def veiculos_visiveis(usuario, queryset):
+    """Veiculos: os proprios, os compartilhados e os das viagens que ele ve."""
+    if eh_plataforma(usuario):
+        return queryset
+    return queryset.filter(
+        Q(owner=usuario) | Q(owner__isnull=True) | filtro_viagens(usuario, prefixo='shipments__')
+    ).distinct()
+
+
+def pode_alterar_cadastro(usuario, objeto):
+    """
+    Ver nao e poder alterar: so o dono (ou a plataforma) altera um local ou veiculo.
+    Cadastro compartilhado (sem dono) so a plataforma altera.
+    """
+    return eh_plataforma(usuario) or (objeto.owner_id is not None and objeto.owner_id == usuario.id)
 
 
 def pela_viagem_visivel(usuario, queryset):

@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 from decouple import config
 
 from django.contrib.auth import get_user_model
+from django.db.models import Q
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.contrib.auth.tokens import default_token_generator
@@ -28,6 +29,7 @@ from rest_framework_simplejwt.exceptions import TokenError
 from django.conf import settings
 
 from . import dois_fatores
+from .permissions import PodeMontarViagem
 from .serializers import LoginSerializer, MeSerializer, emitir_tokens
 
 
@@ -201,6 +203,52 @@ class RecoveryCodesView(APIView):
             dois_fatores.registrar_recusa(request, request.user, 'codigo invalido ao gerar codigos de recuperacao')
             return Response({'detail': 'Código inválido.'}, status=status.HTTP_400_BAD_REQUEST)
         return Response({'recovery_codes': dois_fatores.gerar_codigos_recuperacao(request.user)})
+
+
+# ---------------------------------------------------------------------------
+# Lista de compradores e motoristas (formulario de viagem do vendedor)
+# ---------------------------------------------------------------------------
+
+GRUPO_DO_PAPEL = {'buyer': 'Comprador', 'driver': 'Motorista'}
+LIMITE_LISTA = 50
+
+
+class UsuarioResumoSerializer(serializers.Serializer):
+    """So id e nome: o minimo para o select do formulario (LGPD: sem e-mail)."""
+
+    id = serializers.IntegerField()
+    name = serializers.SerializerMethodField()
+
+    def get_name(self, usuario) -> str:
+        return usuario.get_full_name() or usuario.username
+
+
+class UsersView(APIView):
+    """
+    GET /auth/users?role=buyer|driver[&search=texto]
+
+    Para o vendedor escolher o comprador e o motorista ao montar a viagem.
+    - So quem pode criar viagem acessa (PodeMontarViagem).
+    - So usuarios ativos do grupo pedido; no maximo LIMITE_LISTA, por nome.
+    - Devolve so id e nome: nao expoe e-mail, telefone nem permissoes.
+    """
+
+    permission_classes = [PodeMontarViagem]
+
+    @extend_schema(responses=UsuarioResumoSerializer(many=True))
+    def get(self, request):
+        papel = request.query_params.get('role', '')
+        if papel not in GRUPO_DO_PAPEL:
+            return Response({'detail': 'Informe role=buyer ou role=driver.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        usuarios = User.objects.filter(is_active=True, groups__name=GRUPO_DO_PAPEL[papel])
+        busca = request.query_params.get('search', '').strip()[:100]
+        if busca:
+            usuarios = usuarios.filter(
+                Q(first_name__icontains=busca) | Q(last_name__icontains=busca) | Q(username__icontains=busca)
+            )
+        usuarios = usuarios.distinct().order_by('first_name', 'last_name', 'username')[:LIMITE_LISTA]
+        return Response(UsuarioResumoSerializer(usuarios, many=True).data)
 
 
 class MeView(APIView):
