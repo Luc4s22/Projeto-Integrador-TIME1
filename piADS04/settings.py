@@ -172,6 +172,12 @@ IOT_MAX_BATCH_ITEMS = config('IOT_MAX_BATCH_ITEMS', default=200, cast=int)
 # --------------------------------------------------
 
 # Codigo de missao da equipe: aparece nos logs quando um controle bloqueia algo.
+# Recuperacao de senha e convite de usuario novo (link de uso unico por e-mail).
+# PASSWORD_RESET_URL: tela do front que recebe ?uid=...&token=... e define a senha.
+PASSWORD_RESET_URL = config('PASSWORD_RESET_URL', default='')
+RESEND_API_KEY = config('RESEND_API_KEY', default='')
+RESEND_FROM_EMAIL = config('RESEND_FROM_EMAIL', default='')
+
 SECURITY_MISSION_CODE = config('SECURITY_MISSION_CODE', default='SEM-CODIGO')
 
 # 2FA (TOTP): quantos intervalos de 30 s antes/depois do atual ainda valem.
