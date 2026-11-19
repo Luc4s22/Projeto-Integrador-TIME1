@@ -1,10 +1,6 @@
 
-import json
 import logging
-from urllib.request import Request, urlopen
-from urllib.parse import urlencode
 
-from decouple import config
 
 from django.contrib.auth import get_user_model
 from django.db.models import Q
@@ -12,8 +8,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.encoding import force_str
-from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
-from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_decode
 
 from drf_spectacular.utils import extend_schema, inline_serializer
 
@@ -29,6 +24,9 @@ from rest_framework_simplejwt.exceptions import TokenError
 from django.conf import settings
 
 from . import dois_fatores
+from .acesso import eh_plataforma
+from .convite import enviar_recuperacao
+from .gestao import SoPlataforma, UsuarioGestaoSerializer, CriarUsuarioSerializer, criar_usuario, listar_usuarios
 from .permissions import PodeMontarViagem
 from .serializers import LoginSerializer, MeSerializer, emitir_tokens
 
@@ -225,19 +223,23 @@ class UsuarioResumoSerializer(serializers.Serializer):
 
 class UsersView(APIView):
     """
-    GET /auth/users?role=buyer|driver[&search=texto]
-
-    Para o vendedor escolher o comprador e o motorista ao montar a viagem.
-    - So quem pode criar viagem acessa (PodeMontarViagem).
-    - So usuarios ativos do grupo pedido; no maximo LIMITE_LISTA, por nome.
-    - Devolve so id e nome: nao expoe e-mail, telefone nem permissoes.
+    GET  /auth/users?role=buyer|driver[&search=texto]
+         Para o vendedor escolher o comprador e o motorista ao montar a viagem.
+         So quem pode criar viagem acessa; devolve so id e nome (sem e-mail).
+    GET  /auth/users            (sem role) lista completa: so a plataforma (tela "Usuarios").
+    POST /auth/users            cria usuario e manda o convite: so a plataforma (ver gestao.py).
     """
 
-    permission_classes = [PodeMontarViagem]
+    def get_permissions(self):
+        if self.request.method == 'POST':
+            return [SoPlataforma()]
+        return [PodeMontarViagem()]
 
     @extend_schema(responses=UsuarioResumoSerializer(many=True))
     def get(self, request):
         papel = request.query_params.get('role', '')
+        if not papel and eh_plataforma(request.user):
+            return Response(UsuarioGestaoSerializer(listar_usuarios(), many=True).data)
         if papel not in GRUPO_DO_PAPEL:
             return Response({'detail': 'Informe role=buyer ou role=driver.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -249,6 +251,10 @@ class UsersView(APIView):
             )
         usuarios = usuarios.distinct().order_by('first_name', 'last_name', 'username')[:LIMITE_LISTA]
         return Response(UsuarioResumoSerializer(usuarios, many=True).data)
+
+    @extend_schema(request=CriarUsuarioSerializer)
+    def post(self, request):
+        return criar_usuario(request)
 
 
 class MeView(APIView):
@@ -334,85 +340,13 @@ class PasswordResetView(APIView):
             )
         }
 
-        usuarios = User.objects.filter(
-            email__iexact=email,
-            is_active=True
-        )
+        usuarios = User.objects.filter(email__iexact=email, is_active=True)
 
+        # Vale tambem para quem foi convidado e ainda nao definiu a senha
+        # (conta sem senha utilizavel): o convite vence em 3 dias e a pessoa
+        # pode pedir um link novo por aqui.
         for usuario in usuarios:
-            if not usuario.has_usable_password():
-                continue
-
-            uid = urlsafe_base64_encode(
-                force_bytes(usuario.pk)
-            )
-
-            token = default_token_generator.make_token(
-                usuario
-            )
-
-            base_url = config(
-                'PASSWORD_RESET_URL',
-                default=''
-            )
-
-            api_key = config(
-                'RESEND_API_KEY',
-                default=''
-            )
-
-            remetente = config(
-                'RESEND_FROM_EMAIL',
-                default=''
-            )
-
-            if not all([base_url, api_key, remetente]):
-                logger.error(
-                    'Serviço de recuperação de senha '
-                    'não configurado.'
-                )
-                break
-
-            separador = '&' if '?' in base_url else '?'
-
-            link = (
-                base_url
-                + separador
-                + urlencode({
-                    'uid': uid,
-                    'token': token
-                })
-            )
-
-            mensagem = {
-                'from': remetente,
-                'to': [usuario.email],
-                'subject': 'Recuperação de senha',
-                'text': (
-                    'Recebemos uma solicitação para '
-                    'redefinir sua senha.\n\n'
-                    f'Acesse: {link}\n\n'
-                    'Se não foi você, ignore esta mensagem.'
-                ),
-            }
-
-            requisicao = Request(
-                'https://api.resend.com/emails',
-                data=json.dumps(mensagem).encode('utf-8'),
-                headers={
-                    'Authorization': f'Bearer {api_key}',
-                    'Content-Type': 'application/json',
-                },
-                method='POST'
-            )
-
-            try:
-                with urlopen(requisicao, timeout=10):
-                    pass
-            except Exception:
-                logger.exception(
-                    'Falha no envio de recuperação de senha.'
-                )
+            enviar_recuperacao(usuario)
 
         return Response(resposta)
 

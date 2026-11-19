@@ -314,26 +314,14 @@ class RecuperacaoDeSenhaTest(APITestCase):
         self.url_solicitar = '/api/v1/auth/password-reset'
         self.url_confirmar = '/api/v1/auth/password-reset/confirm'
 
-    @override_settings(PASSWORD_RESET_TIMEOUT=3600)
-    @patch('usuarios.views.urlopen')
-    @patch('usuarios.views.config')
-    def test_solicitar_recuperacao(
-        self,
-        mock_config,
-        mock_urlopen
-    ):
-        valores = {
-            'PASSWORD_RESET_URL':
-                'http://localhost:5173/redefinir-senha',
-            'RESEND_API_KEY': 'chave-ficticia',
-            'RESEND_FROM_EMAIL': 'teste@exemplo.com',
-        }
-
-        mock_config.side_effect = (
-            lambda chave, default='':
-            valores.get(chave, default)
-        )
-
+    @override_settings(
+        PASSWORD_RESET_TIMEOUT=3600,
+        PASSWORD_RESET_URL='http://localhost:5173/redefinir-senha',
+        RESEND_API_KEY='chave-ficticia',
+        RESEND_FROM_EMAIL='teste@exemplo.com',
+    )
+    @patch('usuarios.convite.urlopen')
+    def test_solicitar_recuperacao(self, mock_urlopen):
         resposta = self.client.post(
             self.url_solicitar,
             {'email': self.usuario.email},

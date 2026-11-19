@@ -14,6 +14,7 @@ from .views import (
     RecoveryCodesView,
     UsersView,
 )
+from .gestao import ReenviarConviteView, Resetar2FAView, UsuarioDetalheView
 
 # As rotas aceitam com ou sem barra no final.
 
@@ -40,6 +41,12 @@ urlpatterns = [
     # COMPRADORES E MOTORISTAS (para o vendedor montar a viagem)
     # GET /auth/users?role=buyer|driver&search=texto -> [{id, name}]
     re_path(r'^users/?$', UsersView.as_view(), name='auth-users'),
+
+    # GESTAO DE USUARIOS (so a plataforma): tela "Usuarios" do front
+    # GET /auth/users (sem role) lista; POST /auth/users cria e manda convite.
+    re_path(r'^users/(?P<pk>\d+)/?$', UsuarioDetalheView.as_view(), name='auth-user-detail'),
+    re_path(r'^users/(?P<pk>\d+)/invite/?$', ReenviarConviteView.as_view(), name='auth-user-invite'),
+    re_path(r'^users/(?P<pk>\d+)/reset-2fa/?$', Resetar2FAView.as_view(), name='auth-user-reset-2fa'),
 
     # RENOVAR TOKEN
     # Recebe refresh e devolve novo access.
