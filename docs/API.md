@@ -23,7 +23,7 @@ Base: `https://projeto-integrador-time1.onrender.com/api/v1` · Swagger: `/api/d
 | POST | `/auth/password-reset` · `/auth/password-reset/confirm` | `{"email"}` · `{"uid", "token", "password"}` | recuperação de senha por e-mail |
 
 - `mfa_setup_required: true` → telas de cadastro (setup → activate). `false` → tela do código (verify).
-- O `mfa_token` vale 5 min; vencido → 401 (voltar para e-mail e senha).
+- O `mfa_token` vale 5 min e **uma entrada só**: depois que o login termina, ele não vale mais. Vencido ou já usado → 401 (voltar para e-mail e senha).
 - Código errado, vencido ou já usado → 400 com `detail`. Muitas tentativas → 429 (10 por minuto).
 - `role`: `admin`, `seller` (vendedor), `buyer` (comprador), `driver` (motorista), `operator` ou `viewer`.
 - O access vale 30 min; o refresh, 1 dia.
@@ -81,6 +81,12 @@ Cada usuário só enxerga o que é dele; a plataforma (superusuário ou grupo Ad
 
 Viagem: campos `origin`, `destination`, `vehicle`, `device`, `buyer`, `driver` (ids), `started_at`, `items`.
 `buyer` precisa ser do grupo Comprador e `driver` do grupo Motorista.
+
+**Só a viagem planejada muda.** Depois do `/start`, a viagem (rota, placa, veículo, comprador, motorista) e a carga
+(`/shipment-items`: criar, alterar, apagar) ficam travadas: 400 `Só é possível alterar uma viagem planejada.` /
+`A carga só pode ser alterada enquanto a viagem está planejada.` Ao iniciar, os limites da carga são congelados.
+Toda fruta da carga precisa ter limites cadastrados; senão o item ou o `/start` dão 400 dizendo qual fruta falta.
+`ended_at` é só leitura (quem preenche é o `/finish`).
 
 Status: `planned` (Planejada) → `active` (Em andamento) → `delivered` (Entregue, aguardando confirmação) → `completed` (Concluída); ou `cancelled`.
 

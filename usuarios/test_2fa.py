@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pyotp
 from django.contrib.auth.models import User
 from django.core.cache import cache
+from django.core.management import call_command
 from django.test import override_settings
 from rest_framework.test import APITestCase
 
@@ -151,3 +152,31 @@ class DoisFatoresTest(APITestCase):
             'username': 'ana', 'password': SENHA, 'codigo': pyotp.TOTP(segredo).at(time.time() + 30),
         })
         self.assertEqual(com_codigo.status_code, 302)  # redireciona para o painel: entrou
+
+
+class RevisaoDoTokenTemporarioTest(APITestCase):
+    """mfa_token de uso unico e papel deterministico."""
+
+    def setUp(self):
+        cache.clear()
+        call_command('criar_grupos', verbosity=0)
+        self.usuario = User.objects.create_user('uso-unico', 'uso.unico@teste.local', 'senha-de-teste-123')
+
+    def test_mfa_token_nao_vale_depois_que_o_login_termina(self):
+        login = self.client.post('/api/v1/auth/login',
+                                 {'email': 'uso.unico@teste.local', 'password': 'senha-de-teste-123'}).json()['data']
+        token = login['mfa_token']
+        segredo = self.client.post('/api/v1/auth/2fa/setup', {'mfa_token': token}).json()['data']['secret']
+        ativado = self.client.post('/api/v1/auth/2fa/activate',
+                                   {'mfa_token': token, 'code': pyotp.TOTP(segredo).now()})
+        self.assertEqual(ativado.status_code, 200)
+        # O mesmo token de novo (ex.: alguem que o copiou): ja nao vale.
+        de_novo = self.client.post('/api/v1/auth/2fa/verify',
+                                   {'mfa_token': token, 'recovery_code': ativado.json()['data']['recovery_codes'][0]})
+        self.assertEqual(de_novo.status_code, 401)
+
+    def test_papel_com_varios_grupos_e_sempre_o_de_mais_poder(self):
+        from django.contrib.auth.models import Group
+        from usuarios.serializers import role_do_usuario
+        self.usuario.groups.add(Group.objects.get(name='Motorista'), Group.objects.get(name='Vendedor'))
+        self.assertEqual(role_do_usuario(self.usuario), 'seller')

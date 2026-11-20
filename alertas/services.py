@@ -7,10 +7,14 @@ Ideia central:
   3. Para nao dar alarme falso (o DHT11 erra ~2 C e ~5% de umidade), so abrimos
      alerta se as ULTIMAS `CONSECUTIVE_READINGS` leituras estao fora da faixa.
   4. Nunca existem dois alertas ativos do mesmo tipo na mesma viagem (o banco
-     garante). Se piorar, o alerta existente sobe para critico.
+     garante). Enquanto continua fora da faixa, o alerta guarda a PIOR medicao
+     (a mais distante do limite) e sobe para critico se piorar; nunca desce.
   5. Quando a medida volta ao normal, o alerta ativo e resolvido sozinho.
   6. Impacto e um evento pontual: abre (ou atualiza) o alerta de impacto na hora,
      sem esperar repeticao, e so e encerrado por uma pessoa.
+  7. Concorrencia: a avaliacao trava a linha da viagem (select_for_update), entao
+     duas leituras da mesma viagem chegando juntas sao avaliadas uma de cada vez
+     (sem IntegrityError por dois alertas "iguais" criados ao mesmo tempo).
 """
 
 from decimal import Decimal
@@ -19,6 +23,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from iot.models import Reading
+from transporte.models import Shipment
 from transporte.services import fruit_range
 
 from .models import Alert
@@ -80,11 +85,17 @@ def _anteriores_tambem_fora(reading, tipo, faixa):
     anteriores = list(
         Reading.objects
         .filter(shipment=reading.shipment, recorded_at__lt=reading.recorded_at)
-        .order_by('-recorded_at')[:necessarias]
+        # Desempate deterministico para leituras com o mesmo horario (fila offline).
+        .order_by('-recorded_at', '-sequence', '-id')[:necessarias]
     )
     if len(anteriores) < necessarias:
         return False  # ainda nao ha historico suficiente para confirmar
     return all(classify_reading(r, faixa)[tipo][0] != 'normal' for r in anteriores)
+
+
+def _travar_viagem(shipment_id):
+    """Trava a viagem ate o fim da transacao: avaliacoes da mesma viagem rodam em fila."""
+    Shipment.objects.select_for_update().filter(pk=shipment_id).values_list('pk', flat=True).first()
 
 
 @transaction.atomic
@@ -100,11 +111,15 @@ def evaluate_reading(reading):
     if faixa is None:
         return []  # sem parametros ativos (ou carga incompativel): nao ha como avaliar
 
+    _travar_viagem(reading.shipment_id)
     mudancas = []
     valores = {'temperature': reading.temperature_c, 'humidity': reading.humidity_pct}
 
     for tipo, (nivel, limite) in classify_reading(reading, faixa).items():
-        ativo = Alert.objects.filter(shipment=reading.shipment, type=tipo, status__in=ACTIVE_STATUSES).first()
+        ativo = (
+            Alert.objects.select_for_update()
+            .filter(shipment=reading.shipment, type=tipo, status__in=ACTIVE_STATUSES).first()
+        )
 
         if nivel == 'normal':
             if ativo is not None:
@@ -115,11 +130,19 @@ def evaluate_reading(reading):
             continue
 
         if ativo is not None:
-            if nivel == 'critical' and ativo.severity != 'critical':
-                ativo.severity = 'critical'
-                ativo.measured_value = valores[tipo]
-                ativo.message = _mensagem(tipo, valores[tipo], limite)
-                ativo.save(update_fields=['severity', 'measured_value', 'message'])
+            # measured_value = a PIOR medicao enquanto o alerta esta ativo (mais
+            # distante do limite), como no impacto, que guarda o maior pico.
+            # A severidade so sobe; o alerta so fecha quando volta ao normal.
+            pior = abs(valores[tipo] - limite) > abs(ativo.measured_value - ativo.violated_limit)
+            sobe = nivel == 'critical' and ativo.severity != 'critical'
+            if pior or sobe:
+                if pior:
+                    ativo.measured_value = valores[tipo]
+                    ativo.violated_limit = limite
+                    ativo.message = _mensagem(tipo, valores[tipo], limite)
+                if sobe:
+                    ativo.severity = 'critical'
+                ativo.save(update_fields=['severity', 'measured_value', 'violated_limit', 'message'])
                 mudancas.append(ativo)
             continue
 
@@ -145,7 +168,11 @@ def evaluate_shock(shock_event):
         return None
 
     nivel = 'critical' if pico > limite * SHOCK_CRITICAL_FACTOR else 'warning'
-    ativo = Alert.objects.filter(shipment=shock_event.shipment, type='shock', status__in=ACTIVE_STATUSES).first()
+    _travar_viagem(shock_event.shipment_id)
+    ativo = (
+        Alert.objects.select_for_update()
+        .filter(shipment=shock_event.shipment, type='shock', status__in=ACTIVE_STATUSES).first()
+    )
 
     if ativo is None:
         return Alert.objects.create(

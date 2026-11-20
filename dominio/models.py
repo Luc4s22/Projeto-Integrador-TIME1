@@ -123,6 +123,12 @@ class FruitParameter(models.Model):
                 condition=Q(impact_max_g__isnull=True) | Q(impact_max_g__gt=0),
                 name='fruit_parameters_impact_positive',
             ),
+            # Margem critica negativa nao faz sentido para a classificacao
+            # (warning/critical e a distancia ALEM da faixa).
+            models.CheckConstraint(
+                condition=Q(temperature_critical_margin_c__gte=0, humidity_critical_margin_pct__gte=0),
+                name='fruit_parameters_margins_not_negative',
+            ),
             # So pode existir UM parametro ativo por fruta; e ele que vale para os alertas.
             models.UniqueConstraint(
                 fields=['fruit'], condition=Q(is_active=True),
@@ -138,6 +144,9 @@ class FruitParameter(models.Model):
         if self.humidity_min_pct is not None and self.humidity_max_pct is not None:
             if self.humidity_min_pct >= self.humidity_max_pct:
                 raise ValidationError('A umidade mínima deve ser menor que a máxima.')
+        for margem in (self.temperature_critical_margin_c, self.humidity_critical_margin_pct):
+            if margem is not None and margem < 0:
+                raise ValidationError('As margens críticas não podem ser negativas.')
 
     def __str__(self):
         return f'Parâmetros de {self.fruit.name}'

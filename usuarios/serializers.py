@@ -1,9 +1,13 @@
-from django.contrib.auth import authenticate
-from django.contrib.auth.models import User
+from django.contrib.auth import authenticate, get_user_model
+from django.contrib.auth.models import update_last_login
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 
+User = get_user_model()
+
 # Nome do grupo no Django -> "role" que o front recebe (JSON 1 do plano).
+# Cada usuario tem UM papel (a gestao de usuarios grava um grupo so). Se alguem
+# ficar em mais de um grupo (pelo /admin), vale o primeiro desta ordem: o de mais poder.
 ROLES = {
     'Administrador': 'admin',
     'Vendedor': 'seller',
@@ -17,10 +21,8 @@ ROLES = {
 def role_do_usuario(usuario):
     if usuario.is_superuser:
         return 'admin'
-    for grupo in usuario.groups.values_list('name', flat=True):
-        if grupo in ROLES:
-            return ROLES[grupo]
-    return None
+    grupos = set(usuario.groups.values_list('name', flat=True))
+    return next((papel for grupo, papel in ROLES.items() if grupo in grupos), None)
 
 
 def dados_basicos(usuario):
@@ -54,6 +56,9 @@ class LoginSerializer(serializers.Serializer):
 
 def emitir_tokens(usuario):
     """Tokens JWT + dados do usuario. So e chamado DEPOIS do segundo fator."""
+    # Grava o ultimo login: alem de mostrar na gestao de usuarios, isso invalida
+    # o mfa_token usado nesta entrada (ele carrega o last_login de quando foi criado).
+    update_last_login(None, usuario)
     refresh = RefreshToken.for_user(usuario)
     return {'access': str(refresh.access_token), 'refresh': str(refresh), 'user': dados_basicos(usuario)}
 

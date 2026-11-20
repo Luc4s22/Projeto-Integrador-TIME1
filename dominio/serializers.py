@@ -63,6 +63,10 @@ class FruitParameterSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('A temperatura mínima deve ser menor que a máxima.')
         if valor('humidity_min_pct') >= valor('humidity_max_pct'):
             raise serializers.ValidationError('A umidade mínima deve ser menor que a máxima.')
+        for campo in ('temperature_critical_margin_c', 'humidity_critical_margin_pct'):
+            margem = valor(campo)
+            if margem is not None and margem < 0:
+                raise serializers.ValidationError({campo: 'A margem crítica não pode ser negativa.'})
 
         # Mensagem clara em vez de erro 500 do banco (constraint "um ativo por fruta").
         if valor('is_active'):

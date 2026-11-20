@@ -56,10 +56,14 @@ class Alert(models.Model):
                 fields=['shipment', 'type'], condition=Q(status__in=['open', 'acknowledged']),
                 name='alerts_one_active_per_shipment_type',
             ),
-            # Todo alerta tem origem: uma leitura ou um evento de impacto.
+            # Todo alerta tem EXATAMENTE UMA origem, coerente com o tipo:
+            # temperatura/umidade vem de uma leitura; impacto, de um evento de impacto.
             models.CheckConstraint(
-                condition=Q(reading__isnull=False) | Q(shock_event__isnull=False),
-                name='alerts_has_source',
+                condition=(
+                    Q(type__in=['temperature', 'humidity'], reading__isnull=False, shock_event__isnull=True)
+                    | Q(type='shock', shock_event__isnull=False, reading__isnull=True)
+                ),
+                name='alerts_source_matches_type',
             ),
         ]
 

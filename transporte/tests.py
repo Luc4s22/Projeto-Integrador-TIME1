@@ -395,7 +395,123 @@ class FluxoEntregaTest(APITestCase):
     def test_motorista_da_viagem_precisa_ter_papel_motorista(self):
         admin = User.objects.create_superuser('plataforma', 'plataforma@teste.local', 'senha-de-teste-123')
         self.client.force_authenticate(admin)
+        Shipment.objects.filter(pk=self.c['viagem'].pk).update(status='planned')  # so a planejada aceita alteracao
         resposta = self.client.patch(self.url, {'driver': self.comprador.id}, format='json')
         self.assertEqual(resposta.status_code, 400)
         resposta = self.client.patch(self.url, {'driver': self.motorista.id, 'buyer': self.comprador.id}, format='json')
         self.assertEqual(resposta.status_code, 200, resposta.data)
+
+
+class RegrasRevisadasDaViagemTest(APITestCase):
+    """Pontos da revisao de codigo: carga e dados operacionais so mudam com a viagem planejada."""
+
+    def setUp(self):
+        self.c = montar_cenario(status='planned')  # Manga com faixa 8 a 12 C
+        self.vendedor = User.objects.create_user('vendedor', 'vendedor@teste.local', 'senha-de-teste-123')
+        Shipment.objects.filter(pk=self.c['viagem'].pk).update(created_by=self.vendedor)
+        self.c['viagem'].refresh_from_db()
+        self.client.force_authenticate(User.objects.create_superuser('root', 'root@teste.local', 'x'))
+        self.url = f"/api/v1/shipments/{self.c['viagem'].id}"
+        self.item = self.c['viagem'].items.get()
+
+    def ativar(self):
+        self.assertEqual(self.client.post(f'{self.url}/start').status_code, 200)
+
+    # --- 1. Frutas sem parametros -------------------------------------------------
+
+    def test_fruta_sem_parametros_nao_entra_numa_carga_com_parametros(self):
+        banana = Fruit.objects.create(name='Banana')  # sem FruitParameter
+        with self.assertRaises(IncompatibleCargo) as erro:
+            fruit_range_for([self.c['fruta'].id, banana.id])
+        self.assertIn('Banana', str(erro.exception))
+        resposta = self.client.post('/api/v1/shipment-items', {
+            'shipment': self.c['viagem'].id, 'fruit': banana.id, 'lot': 'B1', 'quantity_kg': '10',
+        }, format='json')
+        self.assertEqual(resposta.status_code, 400)
+
+    def test_iniciar_com_fruta_sem_parametros_e_recusado(self):
+        banana = Fruit.objects.create(name='Banana')
+        ShipmentItem.objects.create(shipment=self.c['viagem'], fruit=banana, lot='B1', quantity_kg=10)
+        resposta = self.client.post(f'{self.url}/start')
+        self.assertEqual(resposta.status_code, 400)
+        self.assertIn('Banana', resposta.data['detail'])
+
+    # --- 6. Carga imutavel depois de iniciar ------------------------------------------
+
+    def test_nao_adiciona_altera_nem_remove_item_depois_de_iniciar(self):
+        self.ativar()
+        outra = Fruit.objects.create(name='Uva')
+        FruitParameter.objects.create(fruit=outra, temperature_min_c=0, temperature_max_c=10,
+                                      humidity_min_pct=80, humidity_max_pct=95)
+        novo = self.client.post('/api/v1/shipment-items', {
+            'shipment': self.c['viagem'].id, 'fruit': outra.id, 'lot': 'U1', 'quantity_kg': '10',
+        }, format='json')
+        self.assertEqual(novo.status_code, 400)
+        alterado = self.client.patch(f'/api/v1/shipment-items/{self.item.id}', {'quantity_kg': '1'}, format='json')
+        self.assertEqual(alterado.status_code, 400)
+        removido = self.client.delete(f'/api/v1/shipment-items/{self.item.id}')
+        self.assertEqual(removido.status_code, 400)
+        self.assertTrue(ShipmentItem.objects.filter(pk=self.item.pk).exists())
+
+    def test_item_nao_muda_de_viagem(self):
+        outra = Shipment.objects.create(
+            origin=self.c['fazenda'], destination=self.c['centro'], vehicle=self.c['veiculo'],
+            device=self.c['dispositivo'], started_at=self.c['inicio'], status='planned',
+        )
+        resposta = self.client.patch(f'/api/v1/shipment-items/{self.item.id}', {'shipment': outra.id}, format='json')
+        self.assertEqual(resposta.status_code, 400)
+
+    # --- 7. Dados operacionais travados depois de iniciar -------------------------------
+
+    def test_planejada_aceita_alteracao(self):
+        resposta = self.client.patch(self.url, {'started_at': self.c['inicio'].isoformat()}, format='json')
+        self.assertEqual(resposta.status_code, 200, resposta.data)
+
+    def test_viagem_em_andamento_nao_muda_rota_placa_nem_pessoas(self):
+        self.ativar()
+        from dominio.models import Location
+        outra_fazenda = Location.objects.create(name='Outra fazenda', type='farm')
+        for campo, valor in (('origin', outra_fazenda.id), ('vehicle', self.c['veiculo'].id),
+                             ('device', self.c['dispositivo'].id)):
+            with self.subTest(campo=campo):
+                resposta = self.client.patch(self.url, {campo: valor}, format='json')
+                self.assertEqual(resposta.status_code, 400)
+                self.assertEqual(resposta.data['detail'], 'Só é possível alterar uma viagem planejada.')
+
+    def test_ended_at_e_so_leitura(self):
+        self.client.patch(self.url, {'ended_at': '2030-01-01T00:00:00Z'}, format='json')
+        self.c['viagem'].refresh_from_db()
+        self.assertIsNone(self.c['viagem'].ended_at)
+
+    def test_vendedor_de_outra_viagem_recebe_403_antes_de_saber_o_status(self):
+        outro = User.objects.create_user('outro', 'outro@teste.local', 'senha-de-teste-123')
+        from django.contrib.auth.models import Group
+        from django.core.management import call_command
+        call_command('criar_grupos', verbosity=0)
+        outro.groups.add(Group.objects.get(name='Vendedor'))
+        self.ativar()
+        self.client.force_authenticate(outro)
+        resposta = self.client.post('/api/v1/shipment-items', {
+            'shipment': self.c['viagem'].id, 'fruit': self.c['fruta'].id, 'lot': 'X', 'quantity_kg': '1',
+        }, format='json')
+        self.assertEqual(resposta.status_code, 403)
+
+
+class FruitParameterMargensTest(APITestCase):
+
+    def setUp(self):
+        self.client.force_authenticate(User.objects.create_superuser('root', 'root@teste.local', 'x'))
+        self.fruta = Fruit.objects.create(name='Caju')
+
+    def test_margem_negativa_e_recusada_pela_api_e_pelo_banco(self):
+        resposta = self.client.post('/api/v1/fruit-parameters', {
+            'fruit': self.fruta.id, 'temperature_min_c': '5', 'temperature_max_c': '10',
+            'humidity_min_pct': '80', 'humidity_max_pct': '90', 'temperature_critical_margin_c': '-3',
+        }, format='json')
+        self.assertEqual(resposta.status_code, 400)
+        from django.db import IntegrityError, transaction
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                FruitParameter.objects.create(fruit=self.fruta, temperature_min_c=5, temperature_max_c=10,
+                                              humidity_min_pct=80, humidity_max_pct=90,
+                                              humidity_critical_margin_pct=-1)
