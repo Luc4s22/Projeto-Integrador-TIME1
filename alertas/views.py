@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -21,10 +22,20 @@ class AlertViewSet(ProtecaoDonoMixin, viewsets.ReadOnlyModelViewSet):
     serializer_class = AlertSerializer
     filterset_fields = ['shipment', 'type', 'severity', 'status']
 
+    @staticmethod
+    def _travar(alerta):
+        """
+        Le o alerta de novo com a linha travada (ate o fim da transacao): duas
+        pessoas clicando juntas, ou uma leitura nova resolvendo o alerta no mesmo
+        instante, nao sobrescrevem o status uma da outra.
+        """
+        return Alert.objects.select_for_update().get(pk=alerta.pk)
+
     @action(detail=True, methods=['post'], permission_classes=[PodeAlterarModelo])
+    @transaction.atomic
     def ack(self, request, pk=None):
         """Marca o alerta como visto por quem esta logado (open -> acknowledged)."""
-        alerta = self.get_object()
+        alerta = self._travar(self.get_object())
         if alerta.status != 'open':
             return Response({'detail': 'Só é possível reconhecer um alerta aberto.'}, status=status.HTTP_400_BAD_REQUEST)
         alerta.status = 'acknowledged'
@@ -34,9 +45,10 @@ class AlertViewSet(ProtecaoDonoMixin, viewsets.ReadOnlyModelViewSet):
         return Response(self.get_serializer(alerta).data)
 
     @action(detail=True, methods=['post'], permission_classes=[PodeAlterarModelo])
+    @transaction.atomic
     def resolve(self, request, pk=None):
         """Encerra o alerta a mao. Necessario para impacto, que nao 'volta ao normal' sozinho."""
-        alerta = self.get_object()
+        alerta = self._travar(self.get_object())
         if alerta.status == 'resolved':
             return Response({'detail': 'Este alerta já está resolvido.'}, status=status.HTTP_400_BAD_REQUEST)
         alerta.status = 'resolved'

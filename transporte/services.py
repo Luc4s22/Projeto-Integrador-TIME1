@@ -16,7 +16,7 @@ from decimal import Decimal
 from django.db.models import Avg, F, Max, Min
 from django.utils import timezone
 
-from dominio.models import FruitParameter
+from dominio.models import Fruit, FruitParameter
 
 
 # =========================================================
@@ -75,21 +75,36 @@ def fruit_range_for(fruit_ids):
     Para margens críticas e impacto máximo,
     utiliza o valor mais rigoroso.
 
-    Retorna None quando não existem parâmetros ativos.
+    Retorna None quando NENHUMA fruta tem parâmetros ativos.
+
+    Levanta IncompatibleCargo quando ALGUMA fruta da carga
+    não tem parâmetros ativos (a faixa ficaria incompleta).
 
     Levanta IncompatibleCargo quando as faixas
     ambientais são incompatíveis.
     """
 
+    fruit_ids = set(fruit_ids)
     params = list(
         FruitParameter.objects.filter(
-            fruit_id__in=set(fruit_ids),
+            fruit_id__in=fruit_ids,
             is_active=True
         )
     )
 
     if not params:
         return None
+
+    # Toda fruta da carga precisa ter parametros ativos. Sem isso, a faixa
+    # seria calculada so com as outras frutas e a carga pareceria compativel
+    # (ex.: maca 2-8 C + banana sem cadastro -> monitoraria so a maca).
+    sem_parametros = fruit_ids - {parametro.fruit_id for parametro in params}
+    if sem_parametros:
+        nomes = ', '.join(sorted(Fruit.objects.filter(pk__in=sem_parametros).values_list('name', flat=True)))
+        raise IncompatibleCargo(
+            f'Sem limites ambientais cadastrados para: {nomes}. '
+            'Cadastre os parâmetros dessas frutas antes de montar a carga.'
+        )
 
     impactos = [
         parametro.impact_max_g

@@ -1,5 +1,4 @@
 from django.utils import timezone
-from django_filters import rest_framework as filters
 from drf_spectacular.utils import extend_schema, inline_serializer
 from rest_framework import serializers, status, viewsets
 from rest_framework.response import Response
@@ -10,6 +9,7 @@ from usuarios.acesso import ProtecaoDonoMixin, pela_viagem_visivel, placas_visiv
 from transporte.services import fruit_range
 
 from .authentication import DeviceKeyAuthentication, DeviceRateThrottle, IsDevice, registrar_contato
+from .filters import ReadingFilter
 from .models import Device, Reading
 from .serializers import (
     DeviceSerializer, HeartbeatInput, ReadingSerializer, TelemetryBatchInput, TelemetryBatchResult,
@@ -25,18 +25,6 @@ class DeviceViewSet(ProtecaoDonoMixin, viewsets.ModelViewSet):
     def filtrar_por_dono(self, usuario, queryset):
         # Placa: so o dono (e a plataforma) ve e altera.
         return placas_visiveis(usuario, queryset)
-
-
-class ReadingFilter(filters.FilterSet):
-    # /readings?shipment=3&start=2026-10-01T00:00:00Z&end=2026-10-02T00:00:00Z
-    start = filters.IsoDateTimeFilter(field_name='recorded_at', lookup_expr='gte')
-    end = filters.IsoDateTimeFilter(field_name='recorded_at', lookup_expr='lte')
-    # So o que chegou depois de um instante: o front busca so as novas a cada atualizacao.
-    since = filters.IsoDateTimeFilter(field_name='recorded_at', lookup_expr='gt')
-
-    class Meta:
-        model = Reading
-        fields = ['device', 'shipment']
 
 
 class ReadingViewSet(ProtecaoDonoMixin, viewsets.ReadOnlyModelViewSet):

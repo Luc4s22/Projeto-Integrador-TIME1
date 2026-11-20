@@ -101,6 +101,15 @@ def pela_viagem_visivel(usuario, queryset):
     return queryset.filter(filtro_viagens(usuario, prefixo='shipment__')).distinct()
 
 
+def eh_vendedor_da_viagem(usuario, viagem):
+    """Quem pode ALTERAR a viagem e a carga: quem criou (vendedor), o dono da placa ou a plataforma."""
+    return (
+        eh_plataforma(usuario)
+        or viagem.created_by_id == usuario.id
+        or viagem.device.owner_id == usuario.id
+    )
+
+
 def registrar_bloqueio(request, recurso, identificador, motivo='nao e dono'):
     """
     Log de seguranca com o CODIGO DE MISSAO da equipe (exigencia do trabalho).

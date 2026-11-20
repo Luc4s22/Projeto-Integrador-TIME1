@@ -255,7 +255,7 @@
                 "verify"
               ]
             },
-            "description": "",
+            "description": "Rode o 1a antes: cada entrada usa um mfa_token novo.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"mfa_token\": \"{{mfa_token}}\",\n  \"recovery_code\": \"XXXX-XXXX\"\n}",
@@ -708,7 +708,7 @@
           ]
         },
         {
-          "name": "Mesmo codigo de novo (espera 400) - rode logo depois do 1b",
+          "name": "Mesmo codigo de novo (espera 400) - rode o 1a de novo antes",
           "request": {
             "method": "POST",
             "header": [
@@ -728,7 +728,7 @@
                 "verify"
               ]
             },
-            "description": "",
+            "description": "Depois do 1b, rode o 1a (o mfa_token e de uso unico) e envie o MESMO codigo: o servidor recusa por reuso.",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"mfa_token\": \"{{mfa_token}}\",\n  \"code\": \"{{codigo}}\"\n}",

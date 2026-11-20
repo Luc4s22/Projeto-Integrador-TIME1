@@ -1,6 +1,9 @@
 
 from django.db import transaction
 from rest_framework import serializers
+from rest_framework.exceptions import PermissionDenied
+
+from usuarios.acesso import eh_vendedor_da_viagem, registrar_bloqueio
 from .models import (
     Shipment,
     ShipmentItem,
@@ -35,9 +38,24 @@ class ShipmentItemSerializer(serializers.ModelSerializer):
             getattr(self.instance, 'fruit', None)
         )
 
-        if viagem.status in ('delivered', 'completed', 'cancelled'):
+        # Primeiro o DONO (a viagem vem do corpo da requisicao): quem nao e o
+        # vendedor recebe 403 sem descobrir nada sobre a viagem (nem o status,
+        # nem se as frutas sao compativeis). Protecao contra IDOR.
+        request = self.context.get('request')
+        if request is not None and not eh_vendedor_da_viagem(request.user, viagem):
+            registrar_bloqueio(request, 'shipment', viagem.pk, motivo='item em viagem de outro usuario')
+            raise PermissionDenied('Você não pode alterar a carga desta viagem.')
+
+        # A carga so muda enquanto a viagem esta planejada: ao iniciar, os
+        # limites ambientais sao calculados a partir dela e congelados.
+        # Mudar a carga depois deixaria o monitoramento com limites de outra carga.
+        if viagem.status != 'planned':
             raise serializers.ValidationError(
-                'Não é possível alterar a carga de uma viagem concluída ou cancelada.'
+                'A carga só pode ser alterada enquanto a viagem está planejada.'
+            )
+        if self.instance is not None and viagem.pk != self.instance.shipment_id:
+            raise serializers.ValidationError(
+                {'shipment': 'Não é possível mover o item para outra viagem.'}
             )
 
         frutas = set(
@@ -108,6 +126,7 @@ class ShipmentSerializer(serializers.ModelSerializer):
             'id',
             'created_by',
             'status',
+            'ended_at',  # quem preenche e o /finish, nunca o cliente
             'created_at',
             'updated_at',
         ]

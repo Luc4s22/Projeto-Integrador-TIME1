@@ -172,6 +172,17 @@ IOT_MAX_BATCH_ITEMS = config('IOT_MAX_BATCH_ITEMS', default=200, cast=int)
 # --------------------------------------------------
 
 # Codigo de missao da equipe: aparece nos logs quando um controle bloqueia algo.
+# Cache no PostgreSQL: o limite de tentativas (login, codigo do 2FA, chat) fica
+# guardado aqui. Com o cache padrao (memoria de cada processo), cada worker do
+# gunicorn contaria separado e 10/min viraria 10/min POR WORKER.
+# A tabela e criada pela migration usuarios/0005_tabela_de_cache.
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.db.DatabaseCache',
+        'LOCATION': 'django_cache',
+    }
+}
+
 # Recuperacao de senha e convite de usuario novo (link de uso unico por e-mail).
 # PASSWORD_RESET_URL: tela do front que recebe ?uid=...&token=... e define a senha.
 PASSWORD_RESET_URL = config('PASSWORD_RESET_URL', default='')

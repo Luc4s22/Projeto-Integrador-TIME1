@@ -1,7 +1,7 @@
 from datetime import timedelta
 from decimal import Decimal
 
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.test import SimpleTestCase, TestCase
 
 from iot.models import Reading
@@ -154,3 +154,47 @@ class EvaluateShockTest(TestCase):
         _, criado1 = self.impacto('e1', '3.0')
         _, criado2 = self.impacto('e1', '3.0')
         self.assertEqual((criado1, criado2), (True, False))
+
+
+class RegrasRevisadasDosAlertasTest(TestCase):
+    """Pontos da revisao de codigo: valor do alerta ativo e integridade da origem."""
+
+    def setUp(self):
+        self.c = montar_cenario()  # faixa 8 a 12 C, margem 3
+        self.agora = self.c['inicio'] + timedelta(minutes=10)
+        self.seq = 0
+
+    def enviar(self, minutos, temperatura):
+        self.seq += 1
+        return register_reading(
+            device=self.c['dispositivo'], shipment=self.c['viagem'], sequence=self.seq,
+            recorded_at=self.agora + timedelta(minutes=minutos),
+            temperature_c=Decimal(temperatura), humidity_pct=Decimal('85'),
+        )
+
+    def test_alerta_ativo_guarda_a_pior_medicao_na_mesma_severidade(self):
+        self.enviar(0, '13')
+        self.enviar(1, '13')
+        self.enviar(2, '14.5')  # pior, ainda warning (margem 3 -> critico so acima de 15)
+        alerta = Alert.objects.get()
+        self.assertEqual((alerta.severity, alerta.measured_value), ('warning', Decimal('14.5')))
+        self.assertIn('14.5', alerta.message)
+
+    def test_medicao_melhor_nao_apaga_a_pior_e_severidade_nao_desce(self):
+        self.enviar(0, '13')
+        self.enviar(1, '13')
+        self.enviar(2, '20')    # critico
+        self.enviar(3, '13')    # melhorou, mas continua fora
+        alerta = Alert.objects.get()
+        self.assertEqual((alerta.severity, alerta.measured_value), ('critical', Decimal('20')))
+
+    def test_alerta_com_origem_incoerente_e_recusado_pelo_banco(self):
+        leitura, _ = self.enviar(0, '10')
+        dados = dict(shipment=self.c['viagem'], severity='warning', measured_value=Decimal('5'),
+                     violated_limit=Decimal('2.5'))
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Alert.objects.create(type='shock', reading=leitura, **dados)  # impacto vindo de leitura
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Alert.objects.create(type='temperature', **dados)  # sem origem

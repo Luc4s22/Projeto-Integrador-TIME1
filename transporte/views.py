@@ -24,7 +24,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from rest_framework import status, viewsets
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import APIException, PermissionDenied
 from rest_framework.decorators import action
 from rest_framework.parsers import (
     MultiPartParser,
@@ -39,10 +39,11 @@ from iot.serializers import (
     ReadingSerializer,
     ShockEventSerializer,
 )
-from iot.views import ReadingFilter
+from iot.filters import ReadingFilter
 
 from usuarios.acesso import (
     ProtecaoDonoMixin,
+    eh_vendedor_da_viagem,
     eh_plataforma,
     pela_viagem_visivel,
     registrar_bloqueio,
@@ -172,13 +173,11 @@ def excluir_uploads_cloudinary(public_ids):
 # VIEWSET DAS VIAGENS
 # =========================================================
 
-def eh_vendedor_da_viagem(usuario, viagem):
-    """Quem pode ALTERAR a viagem: quem criou (vendedor), o dono da placa ou a plataforma."""
-    return (
-        eh_plataforma(usuario)
-        or viagem.created_by_id == usuario.id
-        or viagem.device.owner_id == usuario.id
-    )
+class RegraDaViagem(APIException):
+    """400 com {"detail": "..."} (mesmo formato dos outros erros da viagem)."""
+
+    status_code = 400
+    default_code = 'invalid_state'
 
 
 class ShipmentViewSet(ProtecaoDonoMixin, viewsets.ModelViewSet):
@@ -230,12 +229,23 @@ class ShipmentViewSet(ProtecaoDonoMixin, viewsets.ModelViewSet):
             registrar_bloqueio(self.request, 'shipment', viagem.pk, motivo='papel sem permissao nesta viagem')
             raise PermissionDenied('Você não tem permissão para esta ação nesta viagem.')
 
+    def exigir_planejada(self, viagem):
+        """
+        Dados operacionais (rota, placa, veiculo, comprador, motorista, inicio
+        previsto) so mudam enquanto a viagem esta planejada. Depois de iniciada,
+        o historico e o monitoramento dependem deles.
+        """
+        if viagem.status != 'planned':
+            raise RegraDaViagem('Só é possível alterar uma viagem planejada.')
+
     def perform_update(self, serializer):
         viagem = serializer.instance
         self.exigir_papel_na_viagem(viagem, eh_vendedor_da_viagem(self.request.user, viagem))
+        # Primeiro quem pode (403, com log), depois o estado da viagem (400).
         if 'device' in serializer.validated_data:
             self.exigir_placa_propria(serializer.validated_data['device'])
         self.exigir_cadastros_proprios(serializer.validated_data, atual=viagem)
+        self.exigir_planejada(viagem)
         serializer.save()
 
     def perform_destroy(self, instance):
@@ -843,4 +853,6 @@ class ShipmentItemViewSet(ProtecaoDonoMixin, viewsets.ModelViewSet):
 
     def perform_destroy(self, instance):
         self._exigir_vendedor(instance.shipment)
+        if instance.shipment.status != 'planned':
+            raise RegraDaViagem('A carga só pode ser alterada enquanto a viagem está planejada.')
         instance.delete()

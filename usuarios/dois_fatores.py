@@ -77,16 +77,29 @@ def criar_token_temporario(usuario):
     serve para a etapa do codigo. Ele e assinado com a SECRET_KEY (nao da para
     forjar nem trocar o ID de usuario) e expira em MFA_TOKEN_MAX_AGE segundos.
     """
-    return signing.dumps({'u': usuario.pk}, salt=SALT_TOKEN)
+    return signing.dumps({'u': usuario.pk, 'l': _marca_login(usuario)}, salt=SALT_TOKEN)
+
+
+def _marca_login(usuario):
+    return usuario.last_login.isoformat() if usuario.last_login else ''
 
 
 def usuario_do_token(token, modelo_usuario):
-    """Devolve o usuario do token temporario, ou None se for invalido/expirado."""
+    """
+    Devolve o usuario do token temporario, ou None se for invalido/expirado.
+
+    Uso unico: o token guarda o last_login do momento em que foi criado. Quando
+    o login termina (emitir_tokens grava um last_login novo), o token deixa de
+    valer, mesmo dentro dos 5 minutos.
+    """
     try:
         dados = signing.loads(token, salt=SALT_TOKEN, max_age=settings.MFA_TOKEN_MAX_AGE)
     except signing.BadSignature:  # inclui SignatureExpired
         return None
-    return modelo_usuario.objects.filter(pk=dados.get('u'), is_active=True).first()
+    usuario = modelo_usuario.objects.filter(pk=dados.get('u'), is_active=True).first()
+    if usuario is None or dados.get('l', '') != _marca_login(usuario):
+        return None
+    return usuario
 
 
 # ---------------------------------------------------------------------------
